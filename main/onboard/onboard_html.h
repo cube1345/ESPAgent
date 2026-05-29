@@ -4,7 +4,7 @@ static const char ONBOARD_HTML[] =
 "<!DOCTYPE html><html><head>"
 "<meta charset='utf-8'>"
 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-"<title>MimiClaw Setup</title>"
+"<title>ESPAgent Local Setup</title>"
 "<style>"
 "*{box-sizing:border-box;margin:0;padding:0}"
 "body{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333;padding:16px;max-width:480px;margin:0 auto}"
@@ -30,7 +30,7 @@ static const char ONBOARD_HTML[] =
 ".ap-lock::before{content:'\\1F512';font-size:.75em;margin-right:4px}"
 ".status{text-align:center;padding:20px;color:#1a73e8;font-size:1.1em;display:none}"
 "</style></head><body>"
-"<h1>MimiClaw Setup</h1>"
+"<h1>ESPAgent Local Setup</h1>"
 "<p style='text-align:center;color:#666;font-size:.9em;margin-bottom:12px'>"
 "This local portal remains available at 192.168.4.1 for later updates."
 "</p>"
@@ -60,14 +60,6 @@ static const char ONBOARD_HTML[] =
 "<option value='anthropic'>Anthropic</option>"
 "<option value='openai'>OpenAI</option>"
 "</select>"
-"</div></div>"
-
-/* Telegram section */
-"<div class='card collapsed' id='sec-tg'>"
-"<div class='card-hdr' onclick='toggle(this)'>Telegram Bot</div>"
-"<div class='card-body'>"
-"<label>Bot Token</label>"
-"<input id='tg_token' placeholder='123456:ABC-DEF...'>"
 "</div></div>"
 
 /* Feishu section */
@@ -134,7 +126,7 @@ static const char ONBOARD_HTML[] =
 "}).catch(()=>{btn.textContent='Scan WiFi Networks';btn.disabled=false})}"
 
 "function save(){"
-"var fields=['ssid','password','api_key','model','provider','tg_token',"
+"var fields=['ssid','password','api_key','model','provider',"
 "'feishu_app_id','feishu_app_secret','proxy_host','proxy_port','proxy_type','search_key','tavily_key'];"
 "var data={};"
 "fields.forEach(f=>{data[f]=document.getElementById(f).value.trim()});"

@@ -1,6 +1,6 @@
 #include "tools/tool_bh1750.h"
 #include "drivers/bh1750.h"
-#include "mimi_config.h"
+#include "espagent_config.h"
 
 #include <stdio.h>
 #include "esp_log.h"
@@ -27,11 +27,11 @@ esp_err_t tool_bh1750_read_light_execute(const char *input_json, char *output, s
         return ESP_ERR_INVALID_ARG;
     }
 
-    int sda_gpio = MIMI_BH1750_DEFAULT_SDA_GPIO;
-    int scl_gpio = MIMI_BH1750_DEFAULT_SCL_GPIO;
-    int i2c_port = MIMI_BH1750_DEFAULT_I2C_PORT;
-    int scl_hz = MIMI_BH1750_DEFAULT_SCL_HZ;
-    int address = MIMI_BH1750_DEFAULT_ADDR;
+    int sda_gpio = ESPAGENT_BH1750_DEFAULT_SDA_GPIO;
+    int scl_gpio = ESPAGENT_BH1750_DEFAULT_SCL_GPIO;
+    int i2c_port = ESPAGENT_BH1750_DEFAULT_I2C_PORT;
+    int scl_hz = ESPAGENT_BH1750_DEFAULT_SCL_HZ;
+    int address = ESPAGENT_BH1750_DEFAULT_ADDR;
 
     (void)get_optional_int(root, "sda_gpio", &sda_gpio);
     (void)get_optional_int(root, "scl_gpio", &scl_gpio);
@@ -42,7 +42,7 @@ esp_err_t tool_bh1750_read_light_execute(const char *input_json, char *output, s
 
     if (!bh1750_valid_gpio_pair(sda_gpio, scl_gpio)) {
         snprintf(output, output_size,
-                 "Error: GY-30/BH1750 SDA/SCL GPIOs are not configured or not output-capable. Set MIMI_SECRET_BH1750_SDA_GPIO and MIMI_SECRET_BH1750_SCL_GPIO, or call with {\"sda_gpio\":x,\"scl_gpio\":y}.");
+                 "Error: GY-30/BH1750 SDA/SCL GPIOs are not configured or not output-capable. Set ESPAGENT_SECRET_BH1750_SDA_GPIO and ESPAGENT_SECRET_BH1750_SCL_GPIO, or call with {\"sda_gpio\":x,\"scl_gpio\":y}.");
         cJSON_Delete(root);
         return ESP_ERR_INVALID_STATE;
     }

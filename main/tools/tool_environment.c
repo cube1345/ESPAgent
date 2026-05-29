@@ -1,6 +1,6 @@
 #include "tools/tool_environment.h"
 
-#include "mimi_config.h"
+#include "espagent_config.h"
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -702,17 +702,17 @@ esp_err_t tool_read_environment_execute(const char *input_json, char *output, si
         return ESP_ERR_INVALID_ARG;
     }
 
-    int aht_sda = MIMI_AHT10_DEFAULT_SDA_GPIO;
-    int aht_scl = MIMI_AHT10_DEFAULT_SCL_GPIO;
-    int aht_port = MIMI_AHT10_DEFAULT_I2C_PORT;
-    int aht_hz = MIMI_AHT10_DEFAULT_SCL_HZ;
-    int sgp_sda = MIMI_SGP30_DEFAULT_SDA_GPIO;
-    int sgp_scl = MIMI_SGP30_DEFAULT_SCL_GPIO;
-    int sgp_port = MIMI_SGP30_DEFAULT_I2C_PORT;
-    int sgp_hz = MIMI_SGP30_DEFAULT_SCL_HZ;
-    int gy30_sda = MIMI_BH1750_DEFAULT_SDA_GPIO;
-    int gy30_scl = MIMI_BH1750_DEFAULT_SCL_GPIO;
-    int gy30_addr = MIMI_BH1750_DEFAULT_ADDR;
+    int aht_sda = ESPAGENT_AHT10_DEFAULT_SDA_GPIO;
+    int aht_scl = ESPAGENT_AHT10_DEFAULT_SCL_GPIO;
+    int aht_port = ESPAGENT_AHT10_DEFAULT_I2C_PORT;
+    int aht_hz = ESPAGENT_AHT10_DEFAULT_SCL_HZ;
+    int sgp_sda = ESPAGENT_SGP30_DEFAULT_SDA_GPIO;
+    int sgp_scl = ESPAGENT_SGP30_DEFAULT_SCL_GPIO;
+    int sgp_port = ESPAGENT_SGP30_DEFAULT_I2C_PORT;
+    int sgp_hz = ESPAGENT_SGP30_DEFAULT_SCL_HZ;
+    int gy30_sda = ESPAGENT_BH1750_DEFAULT_SDA_GPIO;
+    int gy30_scl = ESPAGENT_BH1750_DEFAULT_SCL_GPIO;
+    int gy30_addr = ESPAGENT_BH1750_DEFAULT_ADDR;
 
     (void)get_optional_int(root, "aht_sda_gpio", &aht_sda);
     (void)get_optional_int(root, "aht_scl_gpio", &aht_scl);
@@ -830,10 +830,10 @@ esp_err_t tool_environment_read_values(tool_environment_values_t *values,
         return ESP_ERR_TIMEOUT;
     }
 
-    esp_err_t aht_err = env_ensure_aht20_ready(MIMI_AHT10_DEFAULT_SDA_GPIO,
-                                                MIMI_AHT10_DEFAULT_SCL_GPIO,
-                                                MIMI_AHT10_DEFAULT_I2C_PORT,
-                                                MIMI_AHT10_DEFAULT_SCL_HZ);
+    esp_err_t aht_err = env_ensure_aht20_ready(ESPAGENT_AHT10_DEFAULT_SDA_GPIO,
+                                                ESPAGENT_AHT10_DEFAULT_SCL_GPIO,
+                                                ESPAGENT_AHT10_DEFAULT_I2C_PORT,
+                                                ESPAGENT_AHT10_DEFAULT_SCL_HZ);
     if (aht_err == ESP_OK) {
         env_aht20_reading_t aht = {0};
         aht_err = env_read_aht20(&aht);
@@ -845,10 +845,10 @@ esp_err_t tool_environment_read_values(tool_environment_values_t *values,
         }
     }
 
-    esp_err_t sgp_err = env_ensure_sgp30_ready(MIMI_SGP30_DEFAULT_SDA_GPIO,
-                                                MIMI_SGP30_DEFAULT_SCL_GPIO,
-                                                MIMI_SGP30_DEFAULT_I2C_PORT,
-                                                MIMI_SGP30_DEFAULT_SCL_HZ);
+    esp_err_t sgp_err = env_ensure_sgp30_ready(ESPAGENT_SGP30_DEFAULT_SDA_GPIO,
+                                                ESPAGENT_SGP30_DEFAULT_SCL_GPIO,
+                                                ESPAGENT_SGP30_DEFAULT_I2C_PORT,
+                                                ESPAGENT_SGP30_DEFAULT_SCL_HZ);
     if (sgp_err == ESP_OK) {
         env_sgp30_reading_t sgp = {0};
         sgp_err = env_read_sgp30(&sgp);
@@ -861,9 +861,9 @@ esp_err_t tool_environment_read_values(tool_environment_values_t *values,
         }
     }
 
-    esp_err_t gy30_err = env_ensure_gy30_ready(MIMI_BH1750_DEFAULT_SDA_GPIO,
-                                                MIMI_BH1750_DEFAULT_SCL_GPIO,
-                                                MIMI_BH1750_DEFAULT_ADDR);
+    esp_err_t gy30_err = env_ensure_gy30_ready(ESPAGENT_BH1750_DEFAULT_SDA_GPIO,
+                                                ESPAGENT_BH1750_DEFAULT_SCL_GPIO,
+                                                ESPAGENT_BH1750_DEFAULT_ADDR);
     if (gy30_err == ESP_OK) {
         float lux = 0.0f;
         uint16_t raw = 0;

@@ -9,13 +9,13 @@ esp_err_t feishu_bot_init(void);
 
 /**
  * Start the Feishu webhook HTTP server for receiving events.
- * Listens on MIMI_FEISHU_WEBHOOK_PORT.
+ * Listens on ESPAGENT_FEISHU_WEBHOOK_PORT.
  */
 esp_err_t feishu_bot_start(void);
 
 /**
  * Send a text message to a Feishu chat.
- * Automatically splits messages longer than MIMI_FEISHU_MAX_MSG_LEN chars.
+ * Automatically splits messages longer than ESPAGENT_FEISHU_MAX_MSG_LEN chars.
  * @param chat_id  Feishu chat ID (open_id or chat_id)
  * @param text     Message text
  */

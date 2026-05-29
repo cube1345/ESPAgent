@@ -1,6 +1,6 @@
 #include "tools/tool_hc_sr05.h"
 
-#include "mimi_config.h"
+#include "espagent_config.h"
 #include "tools/gpio_policy.h"
 
 #include "driver/gpio.h"
@@ -67,7 +67,7 @@ static esp_err_t read_digital_presence(int out_gpio, char *output, size_t output
 {
     if (out_gpio < 0) {
         snprintf(output, output_size,
-                 "Error: 3-wire presence sensor OUT pin is not configured. Set MIMI_SECRET_PRESENCE_GPIO, or call with {\"out_gpio\":x}.");
+                 "Error: 3-wire presence sensor OUT pin is not configured. Set ESPAGENT_SECRET_PRESENCE_GPIO, or call with {\"out_gpio\":x}.");
         return ESP_ERR_INVALID_STATE;
     }
     if (!presence_pin_allowed(out_gpio, output, output_size)) {
@@ -101,7 +101,7 @@ static esp_err_t hc_sr05_configure_pins(int trig_gpio, int echo_gpio,
 {
     if (trig_gpio < 0 || echo_gpio < 0) {
         snprintf(output, output_size,
-                 "Error: HC-SR05 pins are not configured. Set MIMI_SECRET_HC_SR05_TRIG_GPIO and MIMI_SECRET_HC_SR05_ECHO_GPIO, or call with {\"trig_gpio\":x,\"echo_gpio\":y}.");
+                 "Error: HC-SR05 pins are not configured. Set ESPAGENT_SECRET_HC_SR05_TRIG_GPIO and ESPAGENT_SECRET_HC_SR05_ECHO_GPIO, or call with {\"trig_gpio\":x,\"echo_gpio\":y}.");
         return ESP_ERR_INVALID_STATE;
     }
     if (trig_gpio == echo_gpio) {
@@ -202,9 +202,9 @@ esp_err_t tool_read_presence_execute(const char *input_json, char *output, size_
         return ESP_ERR_INVALID_ARG;
     }
 
-    int out_gpio = MIMI_PRESENCE_DEFAULT_GPIO;
-    int trig_gpio = MIMI_HC_SR05_DEFAULT_TRIG_GPIO;
-    int echo_gpio = MIMI_HC_SR05_DEFAULT_ECHO_GPIO;
+    int out_gpio = ESPAGENT_PRESENCE_DEFAULT_GPIO;
+    int trig_gpio = ESPAGENT_HC_SR05_DEFAULT_TRIG_GPIO;
+    int echo_gpio = ESPAGENT_HC_SR05_DEFAULT_ECHO_GPIO;
 
     bool has_out = get_optional_int(root, "out_gpio", &out_gpio);
     (void)get_optional_int(root, "trig_gpio", &trig_gpio);
@@ -220,7 +220,7 @@ esp_err_t tool_read_presence_execute(const char *input_json, char *output, size_
     }
 
     snprintf(output, output_size,
-             "Error: presence sensor is not configured. For a 3-wire sensor set MIMI_SECRET_PRESENCE_GPIO to the OUT pin; for HC-SR05 set Trig/Echo pins.");
+             "Error: presence sensor is not configured. For a 3-wire sensor set ESPAGENT_SECRET_PRESENCE_GPIO to the OUT pin; for HC-SR05 set Trig/Echo pins.");
     return ESP_ERR_INVALID_STATE;
 }
 
@@ -245,9 +245,9 @@ esp_err_t tool_hc_sr05_read_distance_execute(const char *input_json, char *outpu
         return ESP_ERR_INVALID_ARG;
     }
 
-    int trig_gpio = MIMI_HC_SR05_DEFAULT_TRIG_GPIO;
-    int echo_gpio = MIMI_HC_SR05_DEFAULT_ECHO_GPIO;
-    int threshold_cm = MIMI_HC_SR05_PRESENT_THRESHOLD_CM;
+    int trig_gpio = ESPAGENT_HC_SR05_DEFAULT_TRIG_GPIO;
+    int echo_gpio = ESPAGENT_HC_SR05_DEFAULT_ECHO_GPIO;
+    int threshold_cm = ESPAGENT_HC_SR05_PRESENT_THRESHOLD_CM;
     int samples = HC_SR05_DEFAULT_SAMPLES;
 
     (void)get_optional_int(root, "trig_gpio", &trig_gpio);
@@ -262,7 +262,7 @@ esp_err_t tool_hc_sr05_read_distance_execute(const char *input_json, char *outpu
         samples = HC_SR05_MAX_SAMPLES;
     }
     if (threshold_cm <= 0) {
-        threshold_cm = MIMI_HC_SR05_PRESENT_THRESHOLD_CM;
+        threshold_cm = ESPAGENT_HC_SR05_PRESENT_THRESHOLD_CM;
     }
 
     esp_err_t err = hc_sr05_configure_pins(trig_gpio, echo_gpio, output, output_size);

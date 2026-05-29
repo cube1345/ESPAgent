@@ -1,12 +1,12 @@
-# MimiClaw Agent 部分分析
+# ESPAgent Agent 部分分析
 
-本文面向学习本项目 agent 实现的人，重点解释 MimiClaw 如何在 ESP32-S3 上实现一个能接收消息、构建上下文、调用 LLM、执行工具、保存会话并回复用户的轻量 agent。
+本文面向学习本项目 agent 实现的人，重点解释 ESPAgent 如何在 ESP32-S3 上实现一个能接收消息、构建上下文、调用 LLM、执行工具、保存会话并回复用户的轻量 agent。
 
 ## 入口文件
 
 核心文件：
 
-- `main/mimi.c`: 系统启动顺序，初始化 agent 依赖并启动任务。
+- `main/espagent.c`: 系统启动顺序，初始化 agent 依赖并启动任务。
 - `main/agent/agent_loop.c`: agent 主循环，负责 ReAct tool loop。
 - `main/agent/context_builder.c`: system prompt 构建。
 - `main/llm/llm_proxy.c`: LLM HTTP 请求、响应解析、tool_use 适配。
@@ -19,10 +19,10 @@
 
 ## 总体架构
 
-MimiClaw 的 agent 不是运行在 Linux 上的多进程框架，而是 FreeRTOS 下的单 agent task。它依赖队列把 Telegram、Feishu、WebSocket、cron 等输入统一成 `mimi_msg_t`，再由 agent loop 串行处理。
+ESPAgent 的 agent 不是运行在 Linux 上的多进程框架，而是 FreeRTOS 下的单 agent task。它依赖队列把飞书、WebSocket、cron 等输入统一成 `espagent_msg_t`，再由 agent loop 串行处理。
 
 ```text
-Telegram / Feishu / WebSocket / Cron
+Feishu / WebSocket / Cron
         |
         v
 message_bus inbound queue
@@ -40,7 +40,7 @@ agent_loop task
 message_bus outbound queue
         |
         v
-Telegram / Feishu / WebSocket reply
+Feishu / WebSocket reply
 ```
 
 这个设计的特点是：
@@ -88,13 +88,13 @@ typedef struct {
     char channel[16];
     char chat_id[96];
     char *content;
-} mimi_msg_t;
+} espagent_msg_t;
 ```
 
 字段含义：
 
-- `channel`: 来源，如 `telegram`、`feishu`、`websocket`、`system`。
-- `chat_id`: 回复目标，例如 Telegram chat id、Feishu open_id、WebSocket client id。
+- `channel`: 来源，如 `feishu`、`feishu`、`websocket`、`system`。
+- `chat_id`: 回复目标，例如 Feishu chat id、Feishu open_id、WebSocket client id。
 - `content`: heap 分配的消息文本，队列传递所有权。
 
 消息所有权规则很重要：
@@ -110,7 +110,7 @@ typedef struct {
 
 每收到一条 inbound 消息，它执行：
 
-1. 从 inbound queue 阻塞读取 `mimi_msg_t`。
+1. 从 inbound queue 阻塞读取 `espagent_msg_t`。
 2. 调 `context_build_system_prompt()` 构建 system prompt。
 3. 追加当前 turn context，包括 `source_channel` 和 `source_chat_id`。
 4. 调 `session_get_history_json()` 读取最近历史。
@@ -132,7 +132,7 @@ while (1) {
     messages = session_history(chat_id);
     messages.append({"role": "user", "content": msg.content});
 
-    for (i = 0; i < MIMI_AGENT_MAX_TOOL_ITER; i++) {
+    for (i = 0; i < ESPAGENT_AGENT_MAX_TOOL_ITER; i++) {
         resp = llm_chat_tools(system_prompt, messages, tools_json);
 
         if (!resp.tool_use) {
@@ -164,7 +164,7 @@ User message
   -> final answer
 ```
 
-最大迭代次数由 `MIMI_AGENT_MAX_TOOL_ITER` 控制，当前配置是 10。
+最大迭代次数由 `ESPAGENT_AGENT_MAX_TOOL_ITER` 控制，当前配置是 10。
 
 一次 tool use 的消息结构大致是：
 
@@ -189,7 +189,7 @@ user:
 
 它包含：
 
-1. 固定身份：MimiClaw 是运行在 ESP32-S3 上的个人 AI assistant。
+1. 固定身份：ESPAgent 是运行在 ESP32-S3 上的个人 AI assistant。
 2. 内置工具说明：web_search、time、sensor、GPIO、servo、file、cron 等。
 3. GPIO 和硬件安全规则。
 4. Memory 使用规则。
@@ -212,7 +212,7 @@ user:
 
 ## Tools 机制
 
-工具定义在 `mimi_tool_t`：
+工具定义在 `espagent_tool_t`：
 
 ```c
 typedef struct {
@@ -220,7 +220,7 @@ typedef struct {
     const char *description;
     const char *input_schema_json;
     esp_err_t (*execute)(const char *input_json, char *output, size_t output_size);
-} mimi_tool_t;
+} espagent_tool_t;
 ```
 
 每个工具有四个部分：
@@ -277,7 +277,7 @@ guard 被触发时，不执行真实工具，而是把一段 tool_result 返回�
 typedef struct {
     char *text;
     size_t text_len;
-    llm_tool_call_t calls[MIMI_MAX_TOOL_CALLS];
+    llm_tool_call_t calls[ESPAGENT_MAX_TOOL_CALLS];
     int call_count;
     bool tool_use;
 } llm_response_t;
@@ -302,7 +302,7 @@ agent loop 不需要关心 provider 差异，只处理 `llm_response_t`。
 文件路径格式：
 
 ```text
-/spiffs/sessions/tg_<chat_id>.jsonl
+/spiffs/sessions/session_<chat_id>.jsonl
 ```
 
 每行是一个 JSON：
@@ -453,7 +453,7 @@ hits / (hits + misses)
 1. `main/bus/message_bus.h`  
    先理解消息结构和所有权。
 
-2. `main/mimi.c`  
+2. `main/espagent.c`  
    看初始化顺序，明确每个子系统什么时候可用。
 
 3. `main/agent/agent_loop.c`  
@@ -491,15 +491,15 @@ esp_err_t tool_xxx_execute(const char *input_json, char *output, size_t output_s
 6. 在 `context_builder.c` 增加工具使用 guidance。
 7. 如果是硬件动作，考虑在 `agent_loop.c` 加 tool guard。
 8. 通过 CLI `tool_exec <name> <json>` 单测工具。
-9. 再通过 Telegram/Feishu/WebSocket 端到端测试。
+9. 再通过 Feishu/WebSocket 端到端测试。
 
 ## Agent 部分的核心心智模型
 
-可以把 MimiClaw agent 理解成四层：
+可以把 ESPAgent agent 理解成四层：
 
 ```text
 1. Transport layer
-   Telegram / Feishu / WebSocket / Cron
+   Feishu / WebSocket / Cron
 
 2. Agent orchestration layer
    message_bus + agent_loop + session

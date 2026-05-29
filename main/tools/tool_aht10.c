@@ -1,6 +1,6 @@
 #include "tools/tool_aht10.h"
 #include "drivers/aht10.h"
-#include "mimi_config.h"
+#include "espagent_config.h"
 
 #include <stdio.h>
 #include "esp_log.h"
@@ -29,11 +29,11 @@ esp_err_t tool_aht10_read_temperature_humidity_execute(const char *input_json,
         return ESP_ERR_INVALID_ARG;
     }
 
-    int sda_gpio = MIMI_AHT10_DEFAULT_SDA_GPIO;
-    int scl_gpio = MIMI_AHT10_DEFAULT_SCL_GPIO;
-    int i2c_port = MIMI_AHT10_DEFAULT_I2C_PORT;
-    int scl_hz = MIMI_AHT10_DEFAULT_SCL_HZ;
-    int address = MIMI_AHT10_DEFAULT_ADDR;
+    int sda_gpio = ESPAGENT_AHT10_DEFAULT_SDA_GPIO;
+    int scl_gpio = ESPAGENT_AHT10_DEFAULT_SCL_GPIO;
+    int i2c_port = ESPAGENT_AHT10_DEFAULT_I2C_PORT;
+    int scl_hz = ESPAGENT_AHT10_DEFAULT_SCL_HZ;
+    int address = ESPAGENT_AHT10_DEFAULT_ADDR;
 
     (void)get_optional_int(root, "sda_gpio", &sda_gpio);
     (void)get_optional_int(root, "scl_gpio", &scl_gpio);
@@ -44,7 +44,7 @@ esp_err_t tool_aht10_read_temperature_humidity_execute(const char *input_json,
 
     if (!aht10_valid_gpio_pair(sda_gpio, scl_gpio)) {
         snprintf(output, output_size,
-                 "Error: AHT10 SDA/SCL GPIOs are not configured or not output-capable. Set MIMI_SECRET_AHT10_SDA_GPIO and MIMI_SECRET_AHT10_SCL_GPIO, or call with {\"sda_gpio\":x,\"scl_gpio\":y}.");
+                 "Error: AHT10 SDA/SCL GPIOs are not configured or not output-capable. Set ESPAGENT_SECRET_AHT10_SDA_GPIO and ESPAGENT_SECRET_AHT10_SCL_GPIO, or call with {\"sda_gpio\":x,\"scl_gpio\":y}.");
         cJSON_Delete(root);
         return ESP_ERR_INVALID_STATE;
     }

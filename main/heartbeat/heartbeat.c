@@ -1,5 +1,5 @@
 #include "heartbeat/heartbeat.h"
-#include "mimi_config.h"
+#include "espagent_config.h"
 #include "bus/message_bus.h"
 
 #include <stdio.h>
@@ -14,7 +14,7 @@
 static const char *TAG = "heartbeat";
 
 #define HEARTBEAT_PROMPT \
-    "Read " MIMI_HEARTBEAT_FILE " and follow any instructions or tasks listed there. " \
+    "Read " ESPAGENT_HEARTBEAT_FILE " and follow any instructions or tasks listed there. " \
     "If nothing needs attention, reply with just: HEARTBEAT_OK"
 
 static TimerHandle_t s_heartbeat_timer = NULL;
@@ -30,7 +30,7 @@ static TimerHandle_t s_heartbeat_timer = NULL;
  */
 static bool heartbeat_has_tasks(void)
 {
-    FILE *f = fopen(MIMI_HEARTBEAT_FILE, "r");
+    FILE *f = fopen(ESPAGENT_HEARTBEAT_FILE, "r");
     if (!f) {
         return false;
     }
@@ -81,9 +81,9 @@ static bool heartbeat_send(void)
         return false;
     }
 
-    mimi_msg_t msg;
+    espagent_msg_t msg;
     memset(&msg, 0, sizeof(msg));
-    strncpy(msg.channel, MIMI_CHAN_SYSTEM, sizeof(msg.channel) - 1);
+    strncpy(msg.channel, ESPAGENT_CHAN_SYSTEM, sizeof(msg.channel) - 1);
     strncpy(msg.chat_id, "heartbeat", sizeof(msg.chat_id) - 1);
     msg.content = strdup(HEARTBEAT_PROMPT);
 
@@ -116,7 +116,7 @@ static void heartbeat_timer_callback(TimerHandle_t xTimer)
 esp_err_t heartbeat_init(void)
 {
     ESP_LOGI(TAG, "Heartbeat service initialized (file: %s, interval: %ds)",
-             MIMI_HEARTBEAT_FILE, MIMI_HEARTBEAT_INTERVAL_MS / 1000);
+             ESPAGENT_HEARTBEAT_FILE, ESPAGENT_HEARTBEAT_INTERVAL_MS / 1000);
     return ESP_OK;
 }
 
@@ -129,7 +129,7 @@ esp_err_t heartbeat_start(void)
 
     s_heartbeat_timer = xTimerCreate(
         "heartbeat",
-        pdMS_TO_TICKS(MIMI_HEARTBEAT_INTERVAL_MS),
+        pdMS_TO_TICKS(ESPAGENT_HEARTBEAT_INTERVAL_MS),
         pdTRUE,    /* auto-reload */
         NULL,
         heartbeat_timer_callback
@@ -145,7 +145,7 @@ esp_err_t heartbeat_start(void)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Heartbeat started (every %d min)", MIMI_HEARTBEAT_INTERVAL_MS / 60000);
+    ESP_LOGI(TAG, "Heartbeat started (every %d min)", ESPAGENT_HEARTBEAT_INTERVAL_MS / 60000);
     return ESP_OK;
 }
 

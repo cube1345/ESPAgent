@@ -37,12 +37,12 @@ Assume `ESP-IDF v5.x` and prefer the new master-bus API unless the target codeba
 For this repo, current examples live in:
 
 - [`../../../main/tools/tool_sgp30.c`](../../../main/tools/tool_sgp30.c)
-- [`../../../main/mimi_config.h`](../../../main/mimi_config.h)
-- [`../../../main/mimi_secrets.h.example`](../../../main/mimi_secrets.h.example)
+- [`../../../main/espagent_config.h`](../../../main/espagent_config.h)
+- [`../../../main/espagent_secrets.h.example`](../../../main/espagent_secrets.h.example)
 
 Follow this pattern for new hardware:
 
-1. Put configuration defaults in `mimi_config.h` and the secrets template when needed.
+1. Put configuration defaults in `espagent_config.h` and the secrets template when needed.
 2. Keep the transaction sequence in the hardware-facing file.
 3. Expose a short agent-facing wrapper through the tool registry.
 4. Mention the tool preference in the context builder if chat phrasing should select it automatically.

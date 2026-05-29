@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MimiClaw Quick Deploy Script
+# ESPAgent Quick Deploy Script
 # Usage: ./skills/deploy/scripts/deploy.sh [port]
 #
 # This script handles the full build-flash cycle:
 # 1. Checks prerequisites
-# 2. Ensures mimi_secrets.h exists
+# 2. Ensures espagent_secrets.h exists
 # 3. Builds the firmware
 # 4. Auto-detects or uses specified serial port
 # 5. Flashes and opens monitor
@@ -25,7 +25,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$PROJECT_ROOT"
 
-info "MimiClaw Deploy — project: $PROJECT_ROOT"
+info "ESPAgent Deploy — project: $PROJECT_ROOT"
 
 # Check ESP-IDF
 if ! command -v idf.py &>/dev/null; then
@@ -36,16 +36,16 @@ IDF_VER=$(idf.py --version 2>&1 | head -1)
 info "ESP-IDF: $IDF_VER"
 
 # Check secrets
-if [ ! -f main/mimi_secrets.h ]; then
-    warn "main/mimi_secrets.h not found — creating from example"
-    cp main/mimi_secrets.h.example main/mimi_secrets.h
-    warn "Edit main/mimi_secrets.h with your credentials, then re-run this script"
+if [ ! -f main/espagent_secrets.h ]; then
+    warn "main/espagent_secrets.h not found — creating from example"
+    cp main/espagent_secrets.h.example main/espagent_secrets.h
+    warn "Edit main/espagent_secrets.h with your credentials, then re-run this script"
     exit 1
 fi
 
 # Check if secrets are configured (WiFi SSID not empty)
-if grep -q 'MIMI_SECRET_WIFI_SSID.*""' main/mimi_secrets.h; then
-    error "WiFi SSID is empty in main/mimi_secrets.h — edit it first"
+if grep -q 'ESPAGENT_SECRET_WIFI_SSID.*""' main/espagent_secrets.h; then
+    error "WiFi SSID is empty in main/espagent_secrets.h — edit it first"
 fi
 
 # Build
@@ -53,12 +53,12 @@ info "Building firmware (fullclean)..."
 idf.py fullclean >/dev/null 2>&1 || true
 idf.py build 2>&1 | tail -5
 
-if [ ! -f build/mimiclaw.bin ]; then
+if [ ! -f build/ESPAgent.bin ]; then
     error "Build failed — check errors above"
 fi
 
-BIN_SIZE=$(stat -f%z build/mimiclaw.bin 2>/dev/null || stat -c%s build/mimiclaw.bin 2>/dev/null)
-info "Firmware built: build/mimiclaw.bin ($(( BIN_SIZE / 1024 )) KB)"
+BIN_SIZE=$(stat -f%z build/ESPAgent.bin 2>/dev/null || stat -c%s build/ESPAgent.bin 2>/dev/null)
+info "Firmware built: build/ESPAgent.bin ($(( BIN_SIZE / 1024 )) KB)"
 
 # Detect serial port
 PORT="${1:-}"

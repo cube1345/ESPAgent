@@ -1,6 +1,6 @@
 # Public Knowledge
 
-Last updated: 2026-04-27
+Last updated: 2026-05-30
 
 This file is the required shared handoff document for any AI working in this repository.
 
@@ -22,14 +22,22 @@ Note:
 
 ## Primary Project Goal
 
-Build and maintain a practical ESP32-S3 based MimiClaw firmware that can:
+Build and maintain a practical ESP32-S3 based ESPAgent firmware that can:
 
 - connect to Wi-Fi reliably
-- interact with users through Feishu, Telegram, and WebSocket
+- interact with users through Feishu and WebSocket
 - let the AI call narrow hardware tools safely
 - control onboard hardware such as the ESP32-S3 board WS2812 RGB LED
 - read external sensors such as the SGP30 air-quality sensor over I2C
 - avoid unsafe or hallucinated hardware actions when the requested capability does not actually exist
+
+## Project Identity / Documentation Baseline
+
+- ESPAgent is documented and presented as its own ESP32-S3 firmware project.
+- Root `README.md` now defines the project scope, build flow, and repository layout under the ESPAgent name.
+- `docs/ARCHITECTURE.md` uses the current ESPAgent module layout (`main/channels/feishu`, `main/onboard`, `main/espnow`, `main/sensors`, etc.) and no longer contains external-origin mapping tables.
+- `docs/TODO.md` is an ESPAgent roadmap rather than an external comparison tracker.
+- Application startup orchestration now lives in `main/app/espagent_app.c`; `main/espagent.c` is kept as a thin ESP-IDF entry point.
 
 ## Current Hardware / Runtime Baseline
 
@@ -64,7 +72,6 @@ Important for future AI agents:
 
 - Wi-Fi connection and runtime status inspection
 - Feishu channel active and sending replies successfully
-- Telegram channel code exists, but runtime logs showed no token configured during validation
 - WebSocket inbound/outbound chat channel
 - WS2812 tools:
   - `set_status_light`
@@ -165,9 +172,9 @@ As of 2026-04-27:
   - `main/tools/tool_registry.c`
   - `main/tools/tool_servo.c`
   - `main/tools/tool_servo.h`
-  - `main/mimi_config.h`
-  - `main/mimi_secrets.h`
-  - `main/mimi_secrets.h.example`
+  - `main/espagent_config.h`
+  - `main/espagent_secrets.h`
+  - `main/espagent_secrets.h.example`
   - `main/CMakeLists.txt`
   - `main/cJSON_upstream.c` (new)
   - `main/cJSON_upstream.h` (new)
@@ -212,10 +219,23 @@ Guidance:
 - Ported project to build with ESP-IDF 6.1-dev: removed `json` REQUIRES, bundled upstream cJSON v1.7.15 as `cJSON_upstream.c/h`, fixed `wifi_manager.c` for removed enum.
 - Added servo motor tool `servo_write` on GPIO5 with LEDC PWM (50Hz, 500-2500us).
 - Registered servo in tool_registry (17 total tools).
+
+### 2026-05-30
+
+- Added root `README.md` and updated architecture/roadmap documentation to present ESPAgent as a standalone ESP32-S3 firmware project.
+- Refactored startup glue from `main/espagent.c` into `main/app/espagent_app.c/.h`.
+- `main/espagent.c` now only prints the startup banner and calls application startup phases.
+- Verified `idf.py build` after the refactor; `build/ESPAgent.bin` generated successfully.
+- Flashed the current `build/ESPAgent.bin` and SPIFFS image to ESP32-S3 on `/dev/ttyUSB0`; esptool connected to MAC `28:84:85:54:da:5c`, verified all written hashes, and hard-reset the board.
 - Fixed LLM hallucination about GPIO5 availability: added explicit allowed pin list (1-18, 21, 38, 46) to system prompt in context_builder.c.
 - Build and flash verified successfully on `/dev/ttyUSB0`.
 - Confirmed WiFi connection to `Redmi K70`, IP `10.29.203.55`.
 - All 17 tools registered and agent loop running.
+- Investigated user-reported `Sorry, I encountered an error.` when asking the agent to search online.
+- Verified direct `web_search` works with Tavily, and verified full Agent tool-loop can call `web_search` and summarize results through DeepSeek/OpenAI-compatible chat completions.
+- Added a `web_search` fallback in `main/agent/agent_loop.c`: if search results are available but a later LLM summarization call fails or returns empty, ESPAgent now returns the collected search results instead of the generic error.
+- Added serial diagnostic command `inject_search_zh` in `main/cli/serial_cli.c` to inject a fixed Chinese web-search request without relying on serial console UTF-8 parsing.
+- Built and flashed the fix to `/dev/ttyUSB0`; validation passed with `inject_search_zh`, Wi-Fi IP `10.29.63.187`, `web_search` tool calls, and final Chinese summary response.
 
 ### 2026-04-27 (third session)
 
@@ -244,7 +264,7 @@ Guidance:
 
 ### 2026-04-27 (fifth session)
 
-- Confirmed again that the servo GPIO in firmware is `GPIO5` via `MIMI_SERVO_DEFAULT_GPIO`.
+- Confirmed again that the servo GPIO in firmware is `GPIO5` via `ESPAGENT_SERVO_DEFAULT_GPIO`.
 - Bypassed the LLM and invoked the same registered tool function through serial CLI:
   - `tool_exec servo_write {"angle":90}`
 - Real device logs confirmed the tool executed and PWM was updated:

@@ -1,11 +1,11 @@
 # Feishu / Lark Bot Configuration Guide
 
-This guide walks through setting up a Feishu (or Lark) bot to work with MimiClaw, turning your ESP32-S3 into a Feishu-connected AI assistant.
+This guide walks through setting up a Feishu (or Lark) bot to work with ESPAgent, turning your ESP32-S3 into a Feishu-connected AI assistant.
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [Prerequisites](#prerequisites) [Step 1: Create a Feishu App](#step-1-create-a-feishu-app) [Step 2: Configure App Permissions](#step-2-configure-app-permissions) [Step 3: Set Up Event Subscription](#step-3-set-up-event-subscription) [Step 4: Configure MimiClaw](#step-4-configure-mimiclaw) [Step 5: Network Setup](#step-5-network-setup)
+- [Prerequisites](#prerequisites) [Step 1: Create a Feishu App](#step-1-create-a-feishu-app) [Step 2: Configure App Permissions](#step-2-configure-app-permissions) [Step 3: Set Up Event Subscription](#step-3-set-up-event-subscription) [Step 4: Configure ESPAgent](#step-4-configure-ESPAgent) [Step 5: Network Setup](#step-5-network-setup)
 - [Step 6: Publish and Test](#step-6-publish-and-test)
 - [Architecture](#architecture)
 - [CLI Commands](#cli-commands)
@@ -14,10 +14,10 @@ This guide walks through setting up a Feishu (or Lark) bot to work with MimiClaw
 
 ## Overview
 
-MimiClaw supports Feishu as a messaging channel alongside Telegram and WebSocket. The Feishu integration uses:
+ESPAgent supports Feishu as a messaging channel alongside WebSocket. The Feishu integration uses:
 
 - **Webhook receiver** — the ESP32 runs an HTTP server on port 18790 to receive messages from Feishu
-- **Send API** — MimiClaw sends replies via Feishu's REST API (`/im/v1/messages`)
+- **Send API** — ESPAgent sends replies via Feishu's REST API (`/im/v1/messages`)
 - **Tenant access token** — automatic token management with background refresh
 
 Both **direct messages (P2P)** and **group chats** are supported.
@@ -26,7 +26,7 @@ Both **direct messages (P2P)** and **group chats** are supported.
 
 - A Feishu account (sign up at [feishu.cn](https://www.feishu.cn)) or a Lark account ([larksuite.com](https://www.larksuite.com))
 - Admin access to create apps on [Feishu Open Platform](https://open.feishu.cn/) (or [Lark Developer](https://open.larksuite.com/))
-- MimiClaw flashed on an ESP32-S3 with network access
+- ESPAgent flashed on an ESP32-S3 with network access
 - The ESP32 must be reachable from the internet (see [Network Setup](#step-5-network-setup))
 
 ## Step 1: Create a Feishu App
@@ -34,12 +34,12 @@ Both **direct messages (P2P)** and **group chats** are supported.
 1. Go to [Feishu Open Platform](https://open.feishu.cn/) and sign in
 2. Click **Create Custom App** (or "Create App" on Lark)
 3. Fill in the app details:
-   - **App Name**: Choose a name (e.g., "MimiClaw Bot")
+   - **App Name**: Choose a name (e.g., "ESPAgent Bot")
    - **App Description**: Brief description of your bot
    - **App Icon**: Upload an icon (optional)
 4. After creation, you will see your **App ID** and **App Secret** on the app's **Credentials & Basic Info** page
 
-> **Important:** Save the **App ID** (`cli_xxxxxxxxxxxxxx`) and **App Secret** (`xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`). You will need these to configure MimiClaw.
+> **Important:** Save the **App ID** (`cli_xxxxxxxxxxxxxx`) and **App Secret** (`xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`). You will need these to configure ESPAgent.
 
 ## Step 2: Configure App Permissions
 
@@ -75,7 +75,7 @@ http://<ESP32_IP>:18790/feishu/events
 Replace `<ESP32_IP>` with your ESP32's public IP or domain name.
 
 3. Click **Save** — Feishu will send a verification challenge to the URL
-4. MimiClaw automatically responds to the URL verification challenge, so this should succeed if the ESP32 is reachable
+4. ESPAgent automatically responds to the URL verification challenge, so this should succeed if the ESP32 is reachable
 
 ### Subscribe to Events
 
@@ -98,25 +98,25 @@ In the event subscription settings, you can optionally configure:
 - **Verification Token** — used to verify that events come from Feishu
 - **Encrypt Key** — encrypts event payloads
 
-MimiClaw currently does not verify these tokens, so you can leave them empty for simplicity. For production use, consider implementing verification.
+ESPAgent currently does not verify these tokens, so you can leave them empty for simplicity. For production use, consider implementing verification.
 
-## Step 4: Configure MimiClaw
+## Step 4: Configure ESPAgent
 
-You need to provide the **App ID** and **App Secret** to MimiClaw.
+You need to provide the **App ID** and **App Secret** to ESPAgent.
 
 ### Option 1: Build-time Configuration
 
 1. Copy the secrets template if you haven't already:
 
 ```bash
-cp main/mimi_secrets.h.example main/mimi_secrets.h
+cp main/espagent_secrets.h.example main/espagent_secrets.h
 ```
 
-2. Edit `main/mimi_secrets.h`:
+2. Edit `main/espagent_secrets.h`:
 
 ```c
-#define MIMI_SECRET_FEISHU_APP_ID     "cli_xxxxxxxxxxxxxx"
-#define MIMI_SECRET_FEISHU_APP_SECRET "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+#define ESPAGENT_SECRET_FEISHU_APP_ID     "cli_xxxxxxxxxxxxxx"
+#define ESPAGENT_SECRET_FEISHU_APP_SECRET "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
 
 3. Rebuild and flash:
@@ -131,7 +131,7 @@ idf.py -p PORT flash monitor
 Connect to the UART (COM) port and run:
 
 ```
-mimi> set_feishu_creds cli_xxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ESPAgent> set_feishu_creds cli_xxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 This saves credentials to NVS flash immediately — no rebuild needed.
@@ -139,7 +139,7 @@ This saves credentials to NVS flash immediately — no rebuild needed.
 ### Verify Configuration
 
 ```
-mimi> config_show
+ESPAgent> config_show
 ```
 
 You should see `feishu_app_id: cli_****` and `feishu_app_secret: ****` in the output.
@@ -181,7 +181,7 @@ ngrok http 192.168.1.100:18790
 
 ### Option D: Cloud Server Relay (Production)
 
-For reliable production setups, deploy a lightweight reverse proxy on a cloud server (e.g., Volcengine ECS, AWS EC2) that forwards requests to your ESP32 via a VPN or WireGuard tunnel. This is the approach described in the [Volcengine OpenClaw deployment guide](https://www.volcengine.com/docs/6396/2189942).
+For reliable production setups, deploy a lightweight reverse proxy on a cloud server (e.g., Volcengine ECS, AWS EC2) that forwards requests to your ESP32 via a VPN or WireGuard tunnel. This is the approach described in the [Volcengine ESPAgent deployment guide](https://www.volcengine.com/docs/6396/2189942).
 
 > **Note:** Feishu requires the webhook URL to be accessible and respond within 3 seconds. Ensure your network path has low latency.
 
@@ -248,14 +248,14 @@ Feishu Cloud
 
 ### Configuration Constants
 
-These can be found in `main/mimi_config.h`:
+These can be found in `main/espagent_config.h`:
 
 | Constant | Default | Description |
 |----------|---------|-------------|
-| `MIMI_FEISHU_MAX_MSG_LEN` | 4096 | Max message length per chunk |
-| `MIMI_FEISHU_WEBHOOK_PORT` | 18790 | Webhook HTTP server port |
-| `MIMI_FEISHU_WEBHOOK_PATH` | `/feishu/events` | Webhook endpoint path |
-| `MIMI_FEISHU_WEBHOOK_MAX_BODY` | 16 KB | Max webhook request body size |
+| `ESPAGENT_FEISHU_MAX_MSG_LEN` | 4096 | Max message length per chunk |
+| `ESPAGENT_FEISHU_WEBHOOK_PORT` | 18790 | Webhook HTTP server port |
+| `ESPAGENT_FEISHU_WEBHOOK_PATH` | `/feishu/events` | Webhook endpoint path |
+| `ESPAGENT_FEISHU_WEBHOOK_MAX_BODY` | 16 KB | Max webhook request body size |
 
 ## CLI Commands
 
@@ -289,7 +289,7 @@ These can be found in `main/mimi_config.h`:
 
 ### Messages are truncated
 
-Feishu has a 4096-character limit per message. MimiClaw automatically chunks long messages, but if you see issues, check the serial output for chunking errors.
+Feishu has a 4096-character limit per message. ESPAgent automatically chunks long messages, but if you see issues, check the serial output for chunking errors.
 
 ### Bot works in DM but not in groups
 
@@ -300,7 +300,7 @@ Feishu has a 4096-character limit per message. MimiClaw automatically chunks lon
 ### Event subscription shows errors in Feishu console
 
 - Feishu retries failed events up to 5 times with exponential backoff
-- MimiClaw deduplicates retried events, so duplicate processing is not a concern
+- ESPAgent deduplicates retried events, so duplicate processing is not a concern
 - If events consistently fail, check the ESP32's network connectivity
 
 ## References
@@ -310,4 +310,4 @@ Feishu has a 4096-character limit per message. MimiClaw automatically chunks lon
 - [Feishu Message API](https://open.feishu.cn/document/server-docs/im-v1/message/create)
 - [Feishu Event Subscription Guide](https://open.feishu.cn/document/server-docs/event-subscription/event-subscription-guide)
 - [Lark Developer Documentation](https://open.larksuite.com/document/home/index) (international version)
-- [Volcengine OpenClaw Deployment Guide](https://www.volcengine.com/docs/6396/2189942) (Chinese)
+- [Volcengine ESPAgent Deployment Guide](https://www.volcengine.com/docs/6396/2189942) (Chinese)

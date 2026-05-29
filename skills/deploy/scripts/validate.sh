@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MimiClaw Deployment Validator
+# ESPAgent Deployment Validator
 # Usage: ./skills/deploy/scripts/validate.sh
 #
 # Checks that all prerequisites are met before building.
@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$PROJECT_ROOT"
 
-echo "MimiClaw Deployment Validator"
+echo "ESPAgent Deployment Validator"
 echo "============================="
 echo ""
 
@@ -36,10 +36,10 @@ fi
 
 # 2. Project files
 echo "Project:"
-if [ -f main/mimi_config.h ]; then
-    pass "main/mimi_config.h exists"
+if [ -f main/espagent_config.h ]; then
+    pass "main/espagent_config.h exists"
 else
-    fail "main/mimi_config.h missing — wrong directory?"
+    fail "main/espagent_config.h missing — wrong directory?"
 fi
 
 if [ -f partitions.csv ]; then
@@ -50,35 +50,37 @@ fi
 
 # 3. Secrets
 echo "Secrets:"
-if [ -f main/mimi_secrets.h ]; then
-    pass "main/mimi_secrets.h exists"
+if [ -f main/espagent_secrets.h ]; then
+    pass "main/espagent_secrets.h exists"
 
     # Check individual fields
-    if grep -q 'MIMI_SECRET_WIFI_SSID.*""' main/mimi_secrets.h; then
+    if grep -q 'ESPAGENT_SECRET_WIFI_SSID.*""' main/espagent_secrets.h; then
         fail "WiFi SSID is empty"
     else
         pass "WiFi SSID configured"
     fi
 
-    if grep -q 'MIMI_SECRET_TG_TOKEN.*""' main/mimi_secrets.h; then
-        fail "Telegram token is empty"
+    if grep -q 'ESPAGENT_SECRET_FEISHU_APP_ID.*""' main/espagent_secrets.h ||
+       grep -q 'ESPAGENT_SECRET_FEISHU_APP_SECRET.*""' main/espagent_secrets.h; then
+        warn "Feishu credentials are empty (Feishu channel will be disabled)"
     else
-        pass "Telegram token configured"
+        pass "Feishu credentials configured"
     fi
 
-    if grep -q 'MIMI_SECRET_API_KEY.*""' main/mimi_secrets.h; then
-        fail "Anthropic API key is empty"
+    if grep -q 'ESPAGENT_SECRET_API_KEY.*""' main/espagent_secrets.h; then
+        fail "LLM API key is empty"
     else
-        pass "Anthropic API key configured"
+        pass "LLM API key configured"
     fi
 
-    if grep -q 'MIMI_SECRET_SEARCH_KEY.*""' main/mimi_secrets.h; then
-        warn "Brave Search key not set (web_search will be unavailable)"
+    if grep -q 'ESPAGENT_SECRET_TAVILY_KEY.*""' main/espagent_secrets.h &&
+       grep -q 'ESPAGENT_SECRET_SEARCH_KEY.*""' main/espagent_secrets.h; then
+        warn "No Tavily or Brave Search key set (web_search will be unavailable)"
     else
-        pass "Brave Search key configured"
+        pass "Search key configured"
     fi
 else
-    fail "main/mimi_secrets.h missing — run: cp main/mimi_secrets.h.example main/mimi_secrets.h"
+    fail "main/espagent_secrets.h missing — run: cp main/espagent_secrets.h.example main/espagent_secrets.h"
 fi
 
 # 4. Serial port

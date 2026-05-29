@@ -1,10 +1,10 @@
 # Tool Setup Guides
 
-Configuration guides for MimiClaw's external service integrations.
+Configuration guides for ESPAgent's external service integrations.
 
 Related local setup guide:
 
-- [Wi-Fi AP Onboarding Guide](../WIFI_ONBOARDING_AP.md) — configure firmware builds that expose the local `MimiClaw-XXXX` onboarding/admin access point
+- [Wi-Fi AP Onboarding Guide](../WIFI_ONBOARDING_AP.md) — configure firmware builds that expose the local `ESPAgent-XXXX` onboarding/admin access point
 
 ## Guides
 
@@ -14,11 +14,11 @@ Related local setup guide:
 
 ## Overview
 
-MimiClaw integrates with external services to extend its capabilities. Each guide below walks through obtaining API credentials, configuring MimiClaw (build-time or runtime), and verifying the integration.
+ESPAgent integrates with external services to extend its capabilities. Each guide below walks through obtaining API credentials, configuring ESPAgent (build-time or runtime), and verifying the integration.
 
 All credentials can be set in two ways:
 
-1. **Build-time** — define in `main/mimi_secrets.h` and rebuild
+1. **Build-time** — define in `main/espagent_secrets.h` and rebuild
 2. **Runtime** — use serial CLI commands (saved to NVS flash, no rebuild needed)
 
-See [mimi_secrets.h.example](../../main/mimi_secrets.h.example) for the full list of configurable secrets.
+See [espagent_secrets.h.example](../../main/espagent_secrets.h.example) for the full list of configurable secrets.

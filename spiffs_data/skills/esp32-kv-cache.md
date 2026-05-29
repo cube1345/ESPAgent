@@ -1,6 +1,6 @@
 # ESP32 KV Cache
 
-Design a bounded key-value cache for MimiClaw on ESP32-S3.
+Design a bounded key-value cache for ESPAgent on ESP32-S3.
 
 ## When to use
 Use this skill when implementing or reviewing local cache storage, tool result caching, MCP tool cache, sensor cache, prompt fragment cache, or SPIFFS/NVS-backed KV data.
@@ -165,17 +165,17 @@ Behavior:
 4. Use it for MCP `tools/list` and SGP30/presence last-read samples.
 5. Add SPIFFS persistence only after RAM behavior is verified.
 
-## Current MimiClaw implementation
+## Current ESPAgent implementation
 - RAM cache lives in `main/cache/cache_store.c` with API in `main/cache/cache_store.h`.
 - Startup initializes it from `app_main()` before skills are loaded.
-- Config limits are in `main/mimi_config.h`:
-  - `MIMI_CACHE_MAX_ENTRIES=32`
-  - `MIMI_CACHE_MAX_KEY_BYTES=64`
-  - `MIMI_CACHE_MAX_VALUE_BYTES=4096`
-  - `MIMI_CACHE_MAX_TOTAL_BYTES=24KB`
-  - `MIMI_CACHE_DEFAULT_TTL_S=300`
+- Config limits are in `main/espagent_config.h`:
+  - `ESPAGENT_CACHE_MAX_ENTRIES=32`
+  - `ESPAGENT_CACHE_MAX_KEY_BYTES=64`
+  - `ESPAGENT_CACHE_MAX_VALUE_BYTES=4096`
+  - `ESPAGENT_CACHE_MAX_TOTAL_BYTES=24KB`
+  - `ESPAGENT_CACHE_DEFAULT_TTL_S=300`
 - Values prefer PSRAM through `heap_caps_malloc(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)` and fall back to heap.
-- `prompt:skills_summary` is cached for `MIMI_CACHE_SKILLS_TTL_S`.
+- `prompt:skills_summary` is cached for `ESPAGENT_CACHE_SKILLS_TTL_S`.
 - `write_file` and `edit_file` invalidate the skills summary cache when modifying files under `/spiffs/skills/`.
 - Serial CLI commands:
   - `cache_stats`
@@ -193,12 +193,12 @@ Next good cache targets:
 ## Suggested compile-time limits
 Start conservative:
 ```c
-#define MIMI_CACHE_MAX_ENTRIES          32
-#define MIMI_CACHE_MAX_VALUE_BYTES      2048
-#define MIMI_CACHE_MAX_TOTAL_BYTES      (24 * 1024)
-#define MIMI_CACHE_DEFAULT_TTL_S        300
-#define MIMI_CACHE_STALE_TTL_S          1800
-#define MIMI_CACHE_SPIFFS_FILE          MIMI_SPIFFS_BASE "/cache.jsonl"
+#define ESPAGENT_CACHE_MAX_ENTRIES          32
+#define ESPAGENT_CACHE_MAX_VALUE_BYTES      2048
+#define ESPAGENT_CACHE_MAX_TOTAL_BYTES      (24 * 1024)
+#define ESPAGENT_CACHE_DEFAULT_TTL_S        300
+#define ESPAGENT_CACHE_STALE_TTL_S          1800
+#define ESPAGENT_CACHE_SPIFFS_FILE          ESPAGENT_SPIFFS_BASE "/cache.jsonl"
 ```
 
 For ESP32-S3 with PSRAM, values may live in PSRAM, but metadata should stay small enough for internal RAM when possible.

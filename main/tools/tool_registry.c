@@ -1,6 +1,6 @@
 #include "tool_registry.h"
 
-#include "mimi_config.h"
+#include "espagent_config.h"
 #include "tools/tool_cron.h"
 #include "tools/tool_files.h"
 #include "tools/tool_get_time.h"
@@ -23,11 +23,11 @@ static const char *TAG = "tools";
 
 #define MAX_TOOLS 25
 
-static mimi_tool_t s_tools[MAX_TOOLS];
+static espagent_tool_t s_tools[MAX_TOOLS];
 static int s_tool_count = 0;
 static char *s_tools_json = NULL;
 
-static void register_tool(const mimi_tool_t *tool)
+static void register_tool(const espagent_tool_t *tool)
 {
     if (s_tool_count >= MAX_TOOLS) {
         ESP_LOGE(TAG, "Tool registry full");
@@ -69,7 +69,7 @@ esp_err_t tool_registry_init(void)
     tool_web_search_init();
     tool_gpio_init();
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "web_search",
         .description = "Search the web for current information via Tavily (preferred) or Brave when configured.",
         .input_schema_json =
@@ -79,7 +79,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_web_search_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "get_current_time",
         .description = "Get the current date and time. Also sets the system clock. Call this when you need to know what time or date it is.",
         .input_schema_json =
@@ -87,7 +87,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_get_time_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "read_temperature_humidity",
         .description = "Read temperature and humidity from an AHT10 I2C sensor. Use this when the user asks about room temperature, humidity, AHT10 readings, 温度, 湿度, or 温湿度. Optional SDA/SCL GPIO overrides can be provided for wiring diagnostics.",
         .input_schema_json =
@@ -101,7 +101,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_aht10_read_temperature_humidity_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "read_environment",
         .description = "Read the 3-I2C environment sensor set in one call: AHT20/AHT10 temperature and humidity on hardware I2C0, SGP30 eCO2/TVOC on hardware I2C1, and GY-30/BH1750 light level on software I2C. Prefer this when the user asks for a combined environment test, comprehensive sensor test, AHT20+SGP30+GY30, or Chinese phrases like '综合测试', '环境数据', '读取全部传感器', '温湿度空气质量光照'.",
         .input_schema_json =
@@ -119,7 +119,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_read_environment_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "read_presence",
         .description = "Read human presence from a 3-wire digital OUT human/PIR sensor, or from HC-SR05 ultrasonic proximity when Trig/Echo pins are configured. Prefer this when the user asks whether someone is nearby, whether a person is present, asks about human body sensing, proximity, obstacle distance, or Chinese phrases like '有人吗', '人体传感器', '有人靠近', '检测人体', '测一下距离', or 'HC-SR05'. Returns present=true/false, and distance_cm when ultrasonic mode is used.",
         .input_schema_json =
@@ -133,7 +133,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_read_presence_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "hc_sr05_read_distance",
         .description = "Low-level direct HC-SR05 ultrasonic distance read. Use this for explicit HC-SR05 diagnostics, Trig/Echo wiring checks, threshold tuning, or direct distance measurement requests.",
         .input_schema_json =
@@ -146,50 +146,50 @@ esp_err_t tool_registry_init(void)
         .execute = tool_hc_sr05_read_distance_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "read_file",
-        .description = "Read a file from SPIFFS storage. Path must start with " MIMI_SPIFFS_BASE "/.",
+        .description = "Read a file from SPIFFS storage. Path must start with " ESPAGENT_SPIFFS_BASE "/.",
         .input_schema_json =
             "{\"type\":\"object\","
-            "\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute path starting with " MIMI_SPIFFS_BASE "/\"}},"
+            "\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute path starting with " ESPAGENT_SPIFFS_BASE "/\"}},"
             "\"required\":[\"path\"]}",
         .execute = tool_read_file_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "write_file",
-        .description = "Write or overwrite a file on SPIFFS storage. Path must start with " MIMI_SPIFFS_BASE "/.",
+        .description = "Write or overwrite a file on SPIFFS storage. Path must start with " ESPAGENT_SPIFFS_BASE "/.",
         .input_schema_json =
             "{\"type\":\"object\","
-            "\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute path starting with " MIMI_SPIFFS_BASE "/\"},"
+            "\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute path starting with " ESPAGENT_SPIFFS_BASE "/\"},"
             "\"content\":{\"type\":\"string\",\"description\":\"File content to write\"}},"
             "\"required\":[\"path\",\"content\"]}",
         .execute = tool_write_file_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "edit_file",
         .description = "Find and replace text in a file on SPIFFS. Replaces the first occurrence of old_string with new_string.",
         .input_schema_json =
             "{\"type\":\"object\","
-            "\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute path starting with " MIMI_SPIFFS_BASE "/\"},"
+            "\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute path starting with " ESPAGENT_SPIFFS_BASE "/\"},"
             "\"old_string\":{\"type\":\"string\",\"description\":\"Text to find\"},"
             "\"new_string\":{\"type\":\"string\",\"description\":\"Replacement text\"}},"
             "\"required\":[\"path\",\"old_string\",\"new_string\"]}",
         .execute = tool_edit_file_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "list_dir",
         .description = "List files on SPIFFS storage, optionally filtered by path prefix.",
         .input_schema_json =
             "{\"type\":\"object\","
-            "\"properties\":{\"prefix\":{\"type\":\"string\",\"description\":\"Optional path prefix filter, e.g. " MIMI_SPIFFS_BASE "/memory/\"}},"
+            "\"properties\":{\"prefix\":{\"type\":\"string\",\"description\":\"Optional path prefix filter, e.g. " ESPAGENT_SPIFFS_BASE "/memory/\"}},"
             "\"required\":[]}",
         .execute = tool_list_dir_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "gpio_write",
         .description = "Set an ESP32 GPIO output pin high or low. Use this for relays, digital outputs, or simple LEDs.",
         .input_schema_json =
@@ -200,7 +200,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_gpio_write_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "gpio_read",
         .description = "Read a GPIO pin state. Returns HIGH or LOW. Use for buttons, switches, and digital inputs.",
         .input_schema_json =
@@ -210,7 +210,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_gpio_read_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "gpio_read_all",
         .description = "Read all allowed GPIO pin states in a single call.",
         .input_schema_json =
@@ -218,7 +218,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_gpio_read_all_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "ws2812_set",
         .description = "Set a single WS2812/NeoPixel RGB LED color. Useful for the onboard RGB LED on ESP32-S3 boards. Defaults to the configured onboard WS2812 pin, typically GPIO48.",
         .input_schema_json =
@@ -232,7 +232,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_ws2812_set_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "set_status_light",
         .description = "Set the onboard RGB status light with a natural-language-friendly color. Prefer this when the user asks to turn the board light red, green, blue, white, yellow, purple, cyan, orange, or off.",
         .input_schema_json =
@@ -247,7 +247,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_set_status_light_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "servo_write",
         .description = "Control the servo motor on GPIO5. Set the angle in degrees (0-180) or pulse width in microseconds. For requests like opening, starting, or testing the servo without a specific angle, prefer angle=90 to produce a visible motion. GPIO5 is the only pin supported.",
         .input_schema_json =
@@ -259,7 +259,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_servo_write_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "max98357_play_tone",
         .description = "Play a short test tone through a MAX98357 I2S audio amplifier / speaker. Use this when the user asks to test audio output, a speaker, an audio amplifier, a beep, or MAX98357 wiring. The fixed wiring is BCLK=GPIO1, WS/LRCLK=GPIO2, DIN=GPIO3; SD is optional.",
         .input_schema_json =
@@ -277,7 +277,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_max98357_play_tone_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "sgp30_read_air_quality",
         .description = "Read eCO2 and TVOC from an SGP30 air-quality sensor over I2C. Use this for direct SGP30 reads, VOC/TVOC checks, or explicit sensor diagnostics. Chinese requests like '读取SGP30', '查看TVOC', or '检测空气数据' map here. Optional SDA/SCL GPIO overrides can be provided if board defaults are not configured.",
         .input_schema_json =
@@ -290,7 +290,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_sgp30_read_air_quality_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "read_air_quality",
         .description = "Read air-quality telemetry from the onboard or attached sensor. Prefer this high-level tool when the user asks about air quality, TVOC, eCO2, VOC, indoor air conditions, or Chinese phrases such as '空气质量', '空气怎么样', '检测气体', 'VOC多少', or '读取传感器数据'. Currently backed by SGP30.",
         .input_schema_json =
@@ -303,7 +303,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_sgp30_read_air_quality_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "read_light_level",
         .description = "Read ambient light level in lux from a GY-30/BH1750 I2C light sensor. Prefer this when the user asks about light level, ambient light, illuminance, lux, GY-30, BH1750, 光照, 光线亮度, 照度, or 勒克斯. Optional SDA/SCL GPIO and address overrides can be provided for wiring diagnostics.",
         .input_schema_json =
@@ -317,7 +317,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_bh1750_read_light_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "cron_add",
         .description = "Schedule a recurring or one-shot task. The message will trigger an agent turn when the job fires.",
         .input_schema_json =
@@ -327,13 +327,13 @@ esp_err_t tool_registry_init(void)
             "\"interval_s\":{\"type\":\"integer\",\"description\":\"Interval in seconds (required for 'every')\"},"
             "\"at_epoch\":{\"type\":\"integer\",\"description\":\"Unix timestamp to fire at (required for 'at')\"},"
             "\"message\":{\"type\":\"string\",\"description\":\"Message to inject when the job fires, triggering an agent turn\"},"
-            "\"channel\":{\"type\":\"string\",\"description\":\"Optional reply channel (e.g. 'telegram' or 'feishu'). If omitted, current turn channel is used when available\"},"
-            "\"chat_id\":{\"type\":\"string\",\"description\":\"Optional reply chat_id. Required when channel='telegram'. If omitted during a Telegram turn, current chat_id is used\"}},"
+            "\"channel\":{\"type\":\"string\",\"description\":\"Optional reply channel (e.g. 'feishu' or 'websocket'). If omitted, current turn channel is used when available\"},"
+            "\"chat_id\":{\"type\":\"string\",\"description\":\"Optional reply chat_id. If omitted during an active turn, current chat_id is used\"}},"
             "\"required\":[\"name\",\"schedule_type\",\"message\"]}",
         .execute = tool_cron_add_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "cron_list",
         .description = "List all scheduled cron jobs with their status, schedule, and IDs.",
         .input_schema_json =
@@ -341,7 +341,7 @@ esp_err_t tool_registry_init(void)
         .execute = tool_cron_list_execute,
     });
 
-    register_tool(&(mimi_tool_t){
+    register_tool(&(espagent_tool_t){
         .name = "cron_remove",
         .description = "Remove a scheduled cron job by its ID.",
         .input_schema_json =

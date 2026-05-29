@@ -1,169 +1,171 @@
-# MimiClaw vs Nanobot — Feature Gap Tracker
+# ESPAgent Roadmap
 
-> Comparing against `nanobot/` reference implementation. Tracks features MimiClaw has not yet aligned with.
-> Priority: P0 = Core missing, P1 = Important enhancement, P2 = Nice to have
+> ESPAgent is tracked as its own ESP32-S3 firmware project. This roadmap lists native ESPAgent capabilities, gaps, and implementation priorities without tying the project identity to any external codebase.
+> Priority: P0 = core missing, P1 = important enhancement, P2 = nice to have.
 
 ---
 
 ## P0 — Core Agent Capabilities
 
 ### [x] ~~Tool Use Loop (multi-turn agent iteration)~~
-- Implemented: `agent_loop.c` ReAct loop with `llm_chat_tools()`, max 10 iterations, non-streaming JSON parsing
+- Implemented: `agent_loop.c` ReAct loop with `llm_chat_tools()`, max 10 iterations, non-streaming JSON parsing.
 
 ### [ ] Memory Write via Tool Use (agent-driven memory persistence)
-- **openclaw**: Agent uses standard `write`/`edit` tools to write `MEMORY.md` and `memory/YYYY-MM-DD.md`; system prompt instructs agent to persist important information; pre-compaction memory flush triggers a silent agent turn to save durable memories before context window limit
-- **MimiClaw**: `memory_write_long_term` and `memory_append_today` exist but are only called from CLI; agent loop never writes memory
-- **Scope**: Expose `memory_write` and `memory_append_today` as tool_use tools for Claude; add system prompt guidance on when to persist memory; optionally add pre-compaction flush (trigger memory save when session history nears `MIMI_SESSION_MAX_MSGS`)
-- **Depends on**: Tool Use Loop
+- **Target**: The agent can persist important information into `MEMORY.md` and daily memory files through explicit tool calls.
+- **Current**: `memory_write_long_term` and `memory_append_today` exist but are only called from CLI.
+- **Scope**: Expose memory write/append tools through `tool_registry.c`; add prompt guidance on when to persist memory; optionally trigger memory flush when session history approaches `ESPAGENT_SESSION_MAX_MSGS`.
+- **Depends on**: Tool Use Loop.
 
 ### [x] ~~Tool Registry + web_search Tool~~
-- Implemented: `tools/tool_registry.c` — tool registration, JSON schema builder, dispatch by name
-- Implemented: `tools/tool_web_search.c` — Brave Search API via HTTPS (direct + proxy support)
+- Implemented: `tools/tool_registry.c` — tool registration, JSON schema builder, dispatch by name.
+- Implemented: `tools/tool_web_search.c` — Tavily/Brave Search API via HTTPS with direct and proxy modes.
 
 ### [ ] More Built-in Tools
-- **nanobot built-in tools** not yet ported: `read_file`, `write_file`, `edit_file`, `list_dir`, `message`
-- **Recommendation**: Reasonable tool subset for ESP32: `read_file`, `write_file`, `list_dir` (SPIFFS), `message`, `memory_write`
+- **Target**: Add a practical SPIFFS-oriented tool set for embedded use: `read_file`, `write_file`, `list_dir`, `message`, and `memory_write`.
+- **Current**: Core registry exists; file tools are present but should be reviewed for prompt guidance and safety boundaries.
+- **Recommendation**: Keep each tool narrow, bounded, and explicit about writable paths.
 
-### [ ] Subagent / Spawn Background Tasks
-- **nanobot**: `subagent.py` — SubagentManager spawns independent agent instances with isolated tool sets and system prompts, announces results back to main agent via system channel
-- **MimiClaw**: Not implemented
-- **Recommendation**: ESP32 memory is limited; simplify to a single background FreeRTOS task for long-running work, inject result into inbound queue on completion
+### [ ] Background Work / Long-running Tasks
+- **Target**: Support background jobs that can run outside the immediate chat turn and inject results back into the message bus.
+- **Current**: Dedicated cron, heartbeat, sensor monitor, and environment monitor tasks exist, but there is no generic user-requested background job runner.
+- **Recommendation**: Use one bounded FreeRTOS worker pattern before adding broader scheduling abstractions.
 
 ---
 
 ## P1 — Important Features
 
-### [ ] Telegram User Allowlist (allow_from)
-- **nanobot**: `channels/base.py` L59-82 — `is_allowed()` checks sender_id against allow_list
-- **MimiClaw**: No authentication; anyone can message the bot and consume API credits
-- **Recommendation**: Store allow_from list in `mimi_secrets.h` as a build-time define, filter in `process_updates()`
+### [ ] Feishu User Allowlist
+- **Target**: Restrict which Feishu users/chats may consume the agent and API credits.
+- **Current**: No allowlist check in the Feishu inbound path.
+- **Recommendation**: Store the allowlist in `espagent_secrets.h` or NVS, then filter before pushing messages into the inbound queue.
 
-### [ ] Telegram Markdown to HTML Conversion
-- **nanobot**: `channels/telegram.py` L16-76 — `_markdown_to_telegram_html()` full converter: code blocks, inline code, bold, italic, links, strikethrough, lists
-- **MimiClaw**: Uses `parse_mode: Markdown` directly; special characters can cause send failures (has fallback to plain text)
-- **Recommendation**: Implement simplified Markdown-to-HTML converter, or switch to `parse_mode: HTML`
+### [ ] Feishu Markdown to HTML Conversion
+- **Target**: Send richer formatted Feishu replies without parse failures.
+- **Current**: Reply formatting is intentionally simple; special characters can still require plain-text fallback.
+- **Recommendation**: Implement a small Markdown-to-Feishu converter for code blocks, inline code, bold, lists, and links.
 
-### [ ] Telegram /start Command
-- **nanobot**: `telegram.py` L183-192 — handles `/start` command, replies with welcome message
-- **MimiClaw**: Not handled; /start is sent to Claude as a regular message
+### [ ] Feishu /start Command
+- **Target**: Handle `/start` locally with a short ESPAgent welcome/status message.
+- **Current**: `/start` is treated as normal user text.
+- **Recommendation**: Intercept it in `channels/feishu/feishu_bot.c` before enqueueing to the agent loop.
 
-### [ ] Telegram Media Handling (photos/voice/files)
-- **nanobot**: `telegram.py` L194-289 — handles photo, voice, audio, document; downloads files; transcribes voice
-- **MimiClaw**: Only processes `message.text`, ignores all media messages
-- **Recommendation**: Images can be base64-encoded for Claude Vision; voice requires Whisper API (extra HTTPS request)
+### [ ] Feishu Media Handling (photos/voice/files)
+- **Target**: Handle image, voice, audio, and document messages.
+- **Current**: Text messages are supported; media payloads are ignored.
+- **Recommendation**: Start with image download and base64 forwarding to a vision-capable LLM; add voice transcription only after the HTTPS memory impact is measured.
 
-### [ ] Skills System (pluggable capabilities)
-- **nanobot**: `agent/skills.py` — loads skills from SKILL.md files, supports always-loaded and on-demand, frontmatter metadata, requirements checking
-- **MimiClaw**: Not implemented
-- **Recommendation**: Simplified version: store SKILL.md files on SPIFFS, load into system prompt via context_builder
+### [ ] Skills System Expansion
+- **Target**: SPIFFS skills can be always-loaded or loaded on demand, with concise metadata.
+- **Current**: `skill_loader.c` builds a prompt summary from Markdown skill files.
+- **Recommendation**: Add frontmatter parsing only if the current summary becomes too noisy.
 
-### [ ] Full Bootstrap File Alignment
-- **nanobot**: Loads `AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `IDENTITY.md` (5 files)
-- **MimiClaw**: Only loads `SOUL.md` and `USER.md`
-- **Recommendation**: Add AGENTS.md (behavior guidelines) and TOOLS.md (tool documentation)
+### [ ] Bootstrap File Completion
+- **Target**: Keep behavior guidelines, user preferences, tool notes, and identity data as explicit SPIFFS bootstrap files.
+- **Current**: `SOUL.md` and `USER.md` are loaded; skills and memory are summarized separately.
+- **Recommendation**: Add only the files that materially improve prompt quality, then cache their summaries.
 
 ### [ ] Longer Memory Lookback
-- **nanobot**: `memory.py` L56-80 — `get_recent_memories(days=7)` defaults to 7 days
-- **MimiClaw**: `context_builder.c` only reads last 3 days
-- **Recommendation**: Make configurable, but mind token budget
+- **Target**: Make daily memory lookback configurable.
+- **Current**: `context_builder.c` uses a short lookback to control token and RAM pressure.
+- **Recommendation**: Add a compile-time default and optional runtime setting, with a hard maximum.
 
 ### [x] ~~System Prompt Tool Guidance~~
-- Implemented: `context_builder.c` includes tool usage guidance in system prompt
+- Implemented: `context_builder.c` includes tool usage guidance in the system prompt.
 
-### [ ] Message Metadata (media, reply_to, metadata)
-- **nanobot**: `bus/events.py` — InboundMessage has media, metadata fields; OutboundMessage has reply_to
-- **MimiClaw**: `mimi_msg_t` only has channel + chat_id + content
-- **Recommendation**: Extend msg struct, add media_path and metadata fields
+### [ ] Message Metadata
+- **Target**: Carry media references, reply targets, and channel metadata through `espagent_msg_t`.
+- **Current**: `espagent_msg_t` contains `channel`, `chat_id`, and `content`.
+- **Recommendation**: Extend the struct carefully and audit every producer/consumer before changing ownership rules.
 
-### [ ] Outbound Subscription Pattern
-- **nanobot**: `bus/queue.py` L41-49 — supports `subscribe_outbound(channel, callback)` subscription model
-- **MimiClaw**: Hardcoded if-else dispatch
-- **Recommendation**: Current approach is simple and reliable; not worth changing with few channels
+### [ ] Outbound Channel Registration
+- **Target**: Let channels register outbound handlers instead of hardcoding every route in `espagent.c`.
+- **Current**: Outbound dispatch uses a small if/else chain for Feishu, WebSocket, and system messages.
+- **Recommendation**: Current code is simple and acceptable; defer until more channels exist.
 
 ---
 
 ## P2 — Advanced Features
 
 ### [ ] Cron Scheduled Task Service
-- **nanobot**: `cron/service.py` — full cron scheduler supporting at/every/cron expressions, persistent storage, timed agent triggers
-- **MimiClaw**: Not implemented
-- **Recommendation**: Use FreeRTOS timer for simplified version, support "every N minutes" only
+- **Target**: Support durable scheduled tasks with simple `at` / `every` style expressions.
+- **Current**: Cron service exists and should be expanded cautiously.
+- **Recommendation**: Prefer "every N minutes" and explicit one-shot timestamps before supporting full cron syntax.
 
 ### [ ] Heartbeat Service
-- **nanobot**: `heartbeat/service.py` — reads HEARTBEAT.md every 30 minutes, triggers agent if tasks are found
-- **MimiClaw**: Not implemented
-- **Recommendation**: Simple FreeRTOS timer that periodically checks HEARTBEAT.md
+- **Target**: Periodically inspect heartbeat instructions and trigger the agent when work is pending.
+- **Current**: Heartbeat service exists.
+- **Recommendation**: Add better observability and storage guards before increasing frequency.
 
 ### [ ] Multi-LLM Provider Support
-- **nanobot**: `providers/litellm_provider.py` — supports OpenRouter, Anthropic, OpenAI, Gemini, DeepSeek, Groq, Zhipu, vLLM via LiteLLM
-- **MimiClaw**: Hardcoded to Anthropic Messages API
-- **Recommendation**: Abstract LLM interface, support OpenAI-compatible API (most providers are compatible)
+- **Target**: Support OpenAI-compatible APIs and a small provider selection layer.
+- **Current**: `llm_proxy.c` is built around Anthropic Messages style tool use.
+- **Recommendation**: Abstract message construction and tool-use parsing only when the second provider is implemented.
 
 ### [ ] Voice Transcription
-- **nanobot**: `providers/transcription.py` — Groq Whisper API
-- **MimiClaw**: Not implemented
-- **Recommendation**: Requires extra HTTPS request to Whisper API: download Telegram voice -> forward -> get text
+- **Target**: Convert Feishu voice messages into text before entering the agent loop.
+- **Current**: Not implemented.
+- **Recommendation**: Measure heap/TLS impact for download plus transcription API before adding it to default builds.
 
 ### [x] ~~Build-time Config File + Runtime NVS Override~~
-- Implemented: `mimi_secrets.h` as build-time defaults, NVS as runtime override via CLI
-- Two-layer config: build-time secrets → NVS fallback, CLI commands to set/show/reset
+- Implemented: `espagent_secrets.h` as build-time defaults, NVS as runtime override via CLI.
+- Two-layer config: build-time secrets -> NVS fallback, CLI commands to set/show/reset.
 
 ### [ ] WebSocket Gateway Protocol Enhancement
-- **nanobot**: Gateway port 18790 + richer protocol
-- **MimiClaw**: Basic JSON protocol, lacks streaming token push
-- **Recommendation**: Add `{"type":"token","content":"..."}` streaming push
+- **Target**: Add richer client protocol events such as streaming tokens and structured tool status.
+- **Current**: Basic JSON request/reply protocol on port `18789`.
+- **Recommendation**: Add versioned message types before introducing streaming.
 
 ### [ ] Multi-Channel Manager
-- **nanobot**: `channels/manager.py` — unified lifecycle management for multiple channels
-- **MimiClaw**: Hardcoded in app_main()
-- **Recommendation**: Not worth abstracting with few channels
+- **Target**: Centralize channel lifecycle if Feishu, WebSocket, serial, and future channels need common management.
+- **Current**: Startup is orchestrated directly in `app_main()`.
+- **Recommendation**: Defer until lifecycle duplication becomes real.
 
-### [ ] WhatsApp / Feishu Channels
-- **nanobot**: `channels/whatsapp.py`, `channels/feishu.py`
-- **MimiClaw**: Only Telegram + WebSocket
-- **Recommendation**: Low priority, Telegram is sufficient
+### [ ] Additional IM Channels
+- **Target**: Add more user-facing channels only when there is a clear deployment need.
+- **Current**: Feishu and WebSocket are the supported chat paths.
+- **Recommendation**: Keep channel implementations isolated under `main/channels/`.
 
-### [x] ~~Telegram Proxy Support (HTTP CONNECT)~~
-- Implemented: HTTP CONNECT tunnel via `proxy/http_proxy.c`, configurable via `mimi_secrets.h` (`MIMI_SECRET_PROXY_HOST`/`MIMI_SECRET_PROXY_PORT`)
+### [x] ~~Feishu Proxy Support (HTTP CONNECT)~~
+- Implemented: HTTP CONNECT tunnel via `proxy/http_proxy.c`, configurable via `espagent_secrets.h` (`ESPAGENT_SECRET_PROXY_HOST`/`ESPAGENT_SECRET_PROXY_PORT`).
 
 ### [ ] Session Metadata Persistence
-- **nanobot**: `session/manager.py` L136-153 — session file includes metadata line (created_at, updated_at)
-- **MimiClaw**: JSONL only stores role/content/ts, no metadata header
-- **Recommendation**: Low priority
+- **Target**: Store session metadata such as created/updated timestamps.
+- **Current**: JSONL session files store role/content/ts records only.
+- **Recommendation**: Low priority; add only if UI or maintenance tooling needs it.
 
 ---
 
-## Completed Alignment
+## Completed ESPAgent Capabilities
 
-- [x] Telegram Bot long polling (getUpdates)
+- [x] Feishu WebSocket channel
 - [x] Message Bus (inbound/outbound queues)
 - [x] Agent Loop with ReAct tool use (multi-turn, max 10 iterations)
 - [x] Claude API (Anthropic Messages API, non-streaming, tool_use protocol)
-- [x] Tool Registry + web_search tool (Brave Search API)
+- [x] Tool Registry + web_search tool (Tavily/Brave Search API)
 - [x] Context Builder (system prompt + bootstrap files + memory + tool guidance)
 - [x] Memory Store (MEMORY.md + daily notes)
 - [x] Session Manager (JSONL per chat_id, ring buffer history)
 - [x] WebSocket Gateway (port 18789, JSON protocol)
 - [x] Serial CLI (esp_console, debug/maintenance commands)
-- [x] HTTP CONNECT Proxy (Telegram + Claude API + Brave Search via proxy tunnel)
+- [x] HTTP CONNECT Proxy (Feishu + Claude API + search APIs via proxy tunnel)
 - [x] OTA Update
 - [x] WiFi Manager (build-time credentials, exponential backoff)
 - [x] SPIFFS storage
-- [x] Build-time config (`mimi_secrets.h`) + runtime NVS override via CLI
+- [x] Build-time config (`espagent_secrets.h`) + runtime NVS override via CLI
 
 ---
 
 ## Suggested Implementation Order
 
-```
+```text
 1. [done] Tool Use Loop + Tool Registry + web_search
-2. Memory Write via Tool Use         <- makes the agent actually remember
+2. Memory Write via Tool Use
 3. Built-in Tools (read_file, write_file, message)
-4. Telegram Allowlist (allow_from)   <- security essential
-5. Bootstrap File Completion (AGENTS.md, TOOLS.md)
-6. Subagent (simplified)
-7. Telegram Markdown -> HTML
+4. Feishu Allowlist
+5. Bootstrap File Completion
+6. Background Work / Long-running Tasks
+7. Feishu Markdown -> HTML
 8. Media Handling
-9. Cron / Heartbeat
+9. Cron / Heartbeat expansion
 10. Other enhancements
 ```

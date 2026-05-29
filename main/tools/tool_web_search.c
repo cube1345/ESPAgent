@@ -1,5 +1,5 @@
 #include "tool_web_search.h"
-#include "mimi_config.h"
+#include "espagent_config.h"
 #include "proxy/http_proxy.h"
 
 #include <string.h>
@@ -53,24 +53,24 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 esp_err_t tool_web_search_init(void)
 {
     /* Start with build-time defaults */
-    if (MIMI_SECRET_SEARCH_KEY[0] != '\0') {
-        strncpy(s_brave_key, MIMI_SECRET_SEARCH_KEY, sizeof(s_brave_key) - 1);
+    if (ESPAGENT_SECRET_SEARCH_KEY[0] != '\0') {
+        strncpy(s_brave_key, ESPAGENT_SECRET_SEARCH_KEY, sizeof(s_brave_key) - 1);
     }
-    if (MIMI_SECRET_TAVILY_KEY[0] != '\0') {
-        strncpy(s_tavily_key, MIMI_SECRET_TAVILY_KEY, sizeof(s_tavily_key) - 1);
+    if (ESPAGENT_SECRET_TAVILY_KEY[0] != '\0') {
+        strncpy(s_tavily_key, ESPAGENT_SECRET_TAVILY_KEY, sizeof(s_tavily_key) - 1);
     }
 
     /* NVS overrides take highest priority (set via CLI) */
     nvs_handle_t nvs;
-    if (nvs_open(MIMI_NVS_SEARCH, NVS_READONLY, &nvs) == ESP_OK) {
+    if (nvs_open(ESPAGENT_NVS_SEARCH, NVS_READONLY, &nvs) == ESP_OK) {
         char tmp[128] = {0};
         size_t len = sizeof(tmp);
-        if (nvs_get_str(nvs, MIMI_NVS_KEY_API_KEY, tmp, &len) == ESP_OK && tmp[0]) {
+        if (nvs_get_str(nvs, ESPAGENT_NVS_KEY_API_KEY, tmp, &len) == ESP_OK && tmp[0]) {
             strncpy(s_brave_key, tmp, sizeof(s_brave_key) - 1);
         }
         memset(tmp, 0, sizeof(tmp));
         len = sizeof(tmp);
-        if (nvs_get_str(nvs, MIMI_NVS_KEY_TAVILY_KEY, tmp, &len) == ESP_OK && tmp[0]) {
+        if (nvs_get_str(nvs, ESPAGENT_NVS_KEY_TAVILY_KEY, tmp, &len) == ESP_OK && tmp[0]) {
             strncpy(s_tavily_key, tmp, sizeof(s_tavily_key) - 1);
         }
         nvs_close(nvs);
@@ -417,7 +417,7 @@ esp_err_t tool_web_search_execute(const char *input_json, char *output, size_t o
 {
     if (s_provider == SEARCH_PROVIDER_NONE) {
         snprintf(output, output_size,
-                 "Error: No search API key configured. Set MIMI_SECRET_TAVILY_KEY or MIMI_SECRET_SEARCH_KEY in mimi_secrets.h");
+                 "Error: No search API key configured. Set ESPAGENT_SECRET_TAVILY_KEY or ESPAGENT_SECRET_SEARCH_KEY in espagent_secrets.h");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -503,8 +503,8 @@ esp_err_t tool_web_search_execute(const char *input_json, char *output, size_t o
 esp_err_t tool_web_search_set_key(const char *api_key)
 {
     nvs_handle_t nvs;
-    ESP_ERROR_CHECK(nvs_open(MIMI_NVS_SEARCH, NVS_READWRITE, &nvs));
-    ESP_ERROR_CHECK(nvs_set_str(nvs, MIMI_NVS_KEY_API_KEY, api_key));
+    ESP_ERROR_CHECK(nvs_open(ESPAGENT_NVS_SEARCH, NVS_READWRITE, &nvs));
+    ESP_ERROR_CHECK(nvs_set_str(nvs, ESPAGENT_NVS_KEY_API_KEY, api_key));
     ESP_ERROR_CHECK(nvs_commit(nvs));
     nvs_close(nvs);
 
@@ -519,8 +519,8 @@ esp_err_t tool_web_search_set_key(const char *api_key)
 esp_err_t tool_web_search_set_tavily_key(const char *api_key)
 {
     nvs_handle_t nvs;
-    ESP_ERROR_CHECK(nvs_open(MIMI_NVS_SEARCH, NVS_READWRITE, &nvs));
-    ESP_ERROR_CHECK(nvs_set_str(nvs, MIMI_NVS_KEY_TAVILY_KEY, api_key));
+    ESP_ERROR_CHECK(nvs_open(ESPAGENT_NVS_SEARCH, NVS_READWRITE, &nvs));
+    ESP_ERROR_CHECK(nvs_set_str(nvs, ESPAGENT_NVS_KEY_TAVILY_KEY, api_key));
     ESP_ERROR_CHECK(nvs_commit(nvs));
     nvs_close(nvs);
 

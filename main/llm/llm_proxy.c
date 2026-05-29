@@ -1,5 +1,5 @@
 #include "llm_proxy.h"
-#include "mimi_config.h"
+#include "espagent_config.h"
 #include "proxy/http_proxy.h"
 
 #include <string.h>
@@ -19,8 +19,8 @@ static const char *TAG = "llm";
 #define LLM_DUMP_CHUNK_BYTES 320
 
 static char s_api_key[LLM_API_KEY_MAX_LEN] = {0};
-static char s_model[LLM_MODEL_MAX_LEN] = MIMI_LLM_DEFAULT_MODEL;
-static char s_provider[16] = MIMI_LLM_PROVIDER_DEFAULT;
+static char s_model[LLM_MODEL_MAX_LEN] = ESPAGENT_LLM_DEFAULT_MODEL;
+static char s_provider[16] = ESPAGENT_LLM_PROVIDER_DEFAULT;
 
 static void llm_log_payload(const char *label, const char *payload)
 {
@@ -30,7 +30,7 @@ static void llm_log_payload(const char *label, const char *payload)
     }
 
     size_t total = strlen(payload);
-#if MIMI_LLM_LOG_VERBOSE_PAYLOAD
+#if ESPAGENT_LLM_LOG_VERBOSE_PAYLOAD
     size_t shown = total > LLM_DUMP_MAX_BYTES ? LLM_DUMP_MAX_BYTES : total;
     ESP_LOGI(TAG, "%s (%u bytes)%s",
              label,
@@ -48,9 +48,9 @@ static void llm_log_payload(const char *label, const char *payload)
         ESP_LOGI(TAG, "%s[%u]: %s", label, (unsigned)off, chunk);
     }
 #else
-    if (MIMI_LLM_LOG_PREVIEW_BYTES > 0) {
-        size_t shown = total > MIMI_LLM_LOG_PREVIEW_BYTES ? MIMI_LLM_LOG_PREVIEW_BYTES : total;
-        char preview[MIMI_LLM_LOG_PREVIEW_BYTES + 1];
+    if (ESPAGENT_LLM_LOG_PREVIEW_BYTES > 0) {
+        size_t shown = total > ESPAGENT_LLM_LOG_PREVIEW_BYTES ? ESPAGENT_LLM_LOG_PREVIEW_BYTES : total;
+        char preview[ESPAGENT_LLM_LOG_PREVIEW_BYTES + 1];
         memcpy(preview, payload, shown);
         preview[shown] = '\0';
         for (size_t i = 0; i < shown; i++) {
@@ -189,7 +189,7 @@ static bool provider_is_openai(void)
 
 static const char *llm_api_url(void)
 {
-    return provider_is_openai() ? MIMI_OPENAI_API_URL : MIMI_LLM_API_URL;
+    return provider_is_openai() ? ESPAGENT_OPENAI_API_URL : ESPAGENT_LLM_API_URL;
 }
 
 static const char *llm_api_host(void)
@@ -207,32 +207,32 @@ static const char *llm_api_path(void)
 esp_err_t llm_proxy_init(void)
 {
     /* Start with build-time defaults */
-    if (MIMI_SECRET_API_KEY[0] != '\0') {
-        safe_copy(s_api_key, sizeof(s_api_key), MIMI_SECRET_API_KEY);
+    if (ESPAGENT_SECRET_API_KEY[0] != '\0') {
+        safe_copy(s_api_key, sizeof(s_api_key), ESPAGENT_SECRET_API_KEY);
     }
-    if (MIMI_SECRET_MODEL[0] != '\0') {
-        safe_copy(s_model, sizeof(s_model), MIMI_SECRET_MODEL);
+    if (ESPAGENT_SECRET_MODEL[0] != '\0') {
+        safe_copy(s_model, sizeof(s_model), ESPAGENT_SECRET_MODEL);
     }
-    if (MIMI_SECRET_MODEL_PROVIDER[0] != '\0') {
-        safe_copy(s_provider, sizeof(s_provider), MIMI_SECRET_MODEL_PROVIDER);
+    if (ESPAGENT_SECRET_MODEL_PROVIDER[0] != '\0') {
+        safe_copy(s_provider, sizeof(s_provider), ESPAGENT_SECRET_MODEL_PROVIDER);
     }
 
     /* NVS overrides take highest priority (set via CLI) */
     nvs_handle_t nvs;
-    if (nvs_open(MIMI_NVS_LLM, NVS_READONLY, &nvs) == ESP_OK) {
+    if (nvs_open(ESPAGENT_NVS_LLM, NVS_READONLY, &nvs) == ESP_OK) {
         char tmp[LLM_API_KEY_MAX_LEN] = {0};
         size_t len = sizeof(tmp);
-        if (nvs_get_str(nvs, MIMI_NVS_KEY_API_KEY, tmp, &len) == ESP_OK && tmp[0]) {
+        if (nvs_get_str(nvs, ESPAGENT_NVS_KEY_API_KEY, tmp, &len) == ESP_OK && tmp[0]) {
             safe_copy(s_api_key, sizeof(s_api_key), tmp);
         }
         char model_tmp[LLM_MODEL_MAX_LEN] = {0};
         len = sizeof(model_tmp);
-        if (nvs_get_str(nvs, MIMI_NVS_KEY_MODEL, model_tmp, &len) == ESP_OK && model_tmp[0]) {
+        if (nvs_get_str(nvs, ESPAGENT_NVS_KEY_MODEL, model_tmp, &len) == ESP_OK && model_tmp[0]) {
             safe_copy(s_model, sizeof(s_model), model_tmp);
         }
         char provider_tmp[16] = {0};
         len = sizeof(provider_tmp);
-        if (nvs_get_str(nvs, MIMI_NVS_KEY_PROVIDER, provider_tmp, &len) == ESP_OK && provider_tmp[0]) {
+        if (nvs_get_str(nvs, ESPAGENT_NVS_KEY_PROVIDER, provider_tmp, &len) == ESP_OK && provider_tmp[0]) {
             safe_copy(s_provider, sizeof(s_provider), provider_tmp);
         }
         nvs_close(nvs);
@@ -273,7 +273,7 @@ static esp_err_t llm_http_direct(const char *post_data, resp_buf_t *rb, int *out
         }
     } else {
         esp_http_client_set_header(client, "x-api-key", s_api_key);
-        esp_http_client_set_header(client, "anthropic-version", MIMI_LLM_API_VERSION);
+        esp_http_client_set_header(client, "anthropic-version", ESPAGENT_LLM_API_VERSION);
     }
     esp_http_client_set_post_field(client, post_data, strlen(post_data));
 
@@ -311,7 +311,7 @@ static esp_err_t llm_http_via_proxy(const char *post_data, resp_buf_t *rb, int *
             "anthropic-version: %s\r\n"
             "Content-Length: %d\r\n"
             "Connection: close\r\n\r\n",
-            llm_api_path(), llm_api_host(), s_api_key, MIMI_LLM_API_VERSION, body_len);
+            llm_api_path(), llm_api_host(), s_api_key, ESPAGENT_LLM_API_VERSION, body_len);
     }
 
     if (proxy_conn_write(conn, header, hlen) < 0 ||
@@ -572,9 +572,9 @@ esp_err_t llm_chat_tools(const char *system_prompt,
     // 加入模型和提供商信息
     cJSON_AddStringToObject(body, "model", s_model);
     if (provider_is_openai()) {
-        cJSON_AddNumberToObject(body, "max_completion_tokens", MIMI_LLM_MAX_TOKENS);
+        cJSON_AddNumberToObject(body, "max_completion_tokens", ESPAGENT_LLM_MAX_TOKENS);
     } else {
-        cJSON_AddNumberToObject(body, "max_tokens", MIMI_LLM_MAX_TOKENS);
+        cJSON_AddNumberToObject(body, "max_tokens", ESPAGENT_LLM_MAX_TOKENS);
     }
 
     if (provider_is_openai()) {
@@ -614,7 +614,7 @@ esp_err_t llm_chat_tools(const char *system_prompt,
 
     /* HTTP call */
     resp_buf_t rb;
-    if (resp_buf_init(&rb, MIMI_LLM_STREAM_BUF_SIZE) != ESP_OK) {
+    if (resp_buf_init(&rb, ESPAGENT_LLM_STREAM_BUF_SIZE) != ESP_OK) {
         free(post_data);
         return ESP_ERR_NO_MEM;
     }
@@ -672,7 +672,7 @@ esp_err_t llm_chat_tools(const char *system_prompt,
                 if (tool_calls && cJSON_IsArray(tool_calls)) {
                     cJSON *tc;
                     cJSON_ArrayForEach(tc, tool_calls) {
-                        if (resp->call_count >= MIMI_MAX_TOOL_CALLS) break;
+                        if (resp->call_count >= ESPAGENT_MAX_TOOL_CALLS) break;
                         llm_tool_call_t *call = &resp->calls[resp->call_count];
                         cJSON *id = cJSON_GetObjectItem(tc, "id");
                         cJSON *func = cJSON_GetObjectItem(tc, "function");
@@ -744,7 +744,7 @@ esp_err_t llm_chat_tools(const char *system_prompt,
             cJSON_ArrayForEach(block, content) {
                 cJSON *btype = cJSON_GetObjectItem(block, "type");
                 if (!btype || strcmp(btype->valuestring, "tool_use") != 0) continue;
-                if (resp->call_count >= MIMI_MAX_TOOL_CALLS) break;
+                if (resp->call_count >= ESPAGENT_MAX_TOOL_CALLS) break;
 
                 llm_tool_call_t *call = &resp->calls[resp->call_count];
 
@@ -786,8 +786,8 @@ esp_err_t llm_chat_tools(const char *system_prompt,
 esp_err_t llm_set_api_key(const char *api_key)
 {
     nvs_handle_t nvs;
-    ESP_ERROR_CHECK(nvs_open(MIMI_NVS_LLM, NVS_READWRITE, &nvs));
-    ESP_ERROR_CHECK(nvs_set_str(nvs, MIMI_NVS_KEY_API_KEY, api_key));
+    ESP_ERROR_CHECK(nvs_open(ESPAGENT_NVS_LLM, NVS_READWRITE, &nvs));
+    ESP_ERROR_CHECK(nvs_set_str(nvs, ESPAGENT_NVS_KEY_API_KEY, api_key));
     ESP_ERROR_CHECK(nvs_commit(nvs));
     nvs_close(nvs);
 
@@ -799,8 +799,8 @@ esp_err_t llm_set_api_key(const char *api_key)
 esp_err_t llm_set_model(const char *model)
 {
     nvs_handle_t nvs;
-    ESP_ERROR_CHECK(nvs_open(MIMI_NVS_LLM, NVS_READWRITE, &nvs));
-    ESP_ERROR_CHECK(nvs_set_str(nvs, MIMI_NVS_KEY_MODEL, model));
+    ESP_ERROR_CHECK(nvs_open(ESPAGENT_NVS_LLM, NVS_READWRITE, &nvs));
+    ESP_ERROR_CHECK(nvs_set_str(nvs, ESPAGENT_NVS_KEY_MODEL, model));
     ESP_ERROR_CHECK(nvs_commit(nvs));
     nvs_close(nvs);
 
@@ -812,8 +812,8 @@ esp_err_t llm_set_model(const char *model)
 esp_err_t llm_set_provider(const char *provider)
 {
     nvs_handle_t nvs;
-    ESP_ERROR_CHECK(nvs_open(MIMI_NVS_LLM, NVS_READWRITE, &nvs));
-    ESP_ERROR_CHECK(nvs_set_str(nvs, MIMI_NVS_KEY_PROVIDER, provider));
+    ESP_ERROR_CHECK(nvs_open(ESPAGENT_NVS_LLM, NVS_READWRITE, &nvs));
+    ESP_ERROR_CHECK(nvs_set_str(nvs, ESPAGENT_NVS_KEY_PROVIDER, provider));
     ESP_ERROR_CHECK(nvs_commit(nvs));
     nvs_close(nvs);
 

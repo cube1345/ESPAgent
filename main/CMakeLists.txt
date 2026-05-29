@@ -1,10 +1,10 @@
 idf_component_register(
     SRCS
         "cJSON_upstream.c"
-        "mimi.c"
+        "espagent.c"
+        "app/espagent_app.c"
         "bus/message_bus.c"
         "wifi/wifi_manager.c"
-        "channels/telegram/telegram_bot.c"
         "channels/feishu/feishu_bot.c"
         "llm/llm_proxy.c"
         "agent/agent_loop.c"

@@ -1,6 +1,6 @@
 # WebSocket Chat Client
 
-这是一个最小上位机网页示例，用浏览器直接连接 ESP32 上的 MimiClaw WebSocket 网关。
+这是一个最小上位机网页示例，用浏览器直接连接 ESP32 上的 ESPAgent WebSocket 网关。
 
 ## 文件位置
 

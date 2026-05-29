@@ -1,6 +1,6 @@
 #include "tools/tool_servo.h"
 
-#include "mimi_config.h"
+#include "espagent_config.h"
 
 #include "driver/ledc.h"
 #include "esp_log.h"
@@ -24,7 +24,7 @@ static esp_err_t servo_ensure_ready(void)
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .duty_resolution = LEDC_TIMER_13_BIT,
         .timer_num = LEDC_TIMER_0,
-        .freq_hz = MIMI_SERVO_FREQ_HZ,
+        .freq_hz = ESPAGENT_SERVO_FREQ_HZ,
         .clk_cfg = LEDC_AUTO_CLK,
     };
     esp_err_t err = ledc_timer_config(&timer_cfg);
@@ -34,7 +34,7 @@ static esp_err_t servo_ensure_ready(void)
     }
 
     ledc_channel_config_t chan_cfg = {
-        .gpio_num = MIMI_SERVO_DEFAULT_GPIO,
+        .gpio_num = ESPAGENT_SERVO_DEFAULT_GPIO,
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel = LEDC_CHANNEL_0,
         .intr_type = LEDC_INTR_DISABLE,
@@ -50,7 +50,7 @@ static esp_err_t servo_ensure_ready(void)
     }
 
     s_initialized = true;
-    ESP_LOGI(TAG, "Servo PWM initialized on GPIO %d", MIMI_SERVO_DEFAULT_GPIO);
+    ESP_LOGI(TAG, "Servo PWM initialized on GPIO %d", ESPAGENT_SERVO_DEFAULT_GPIO);
     return ESP_OK;
 }
 
@@ -69,19 +69,19 @@ esp_err_t tool_servo_set_pulse_us(int pulse_us)
     err = ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "LEDC set duty failed on GPIO %d: %s",
-                 MIMI_SERVO_DEFAULT_GPIO, esp_err_to_name(err));
+                 ESPAGENT_SERVO_DEFAULT_GPIO, esp_err_to_name(err));
         return err;
     }
 
     err = ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "LEDC update duty failed on GPIO %d: %s",
-                 MIMI_SERVO_DEFAULT_GPIO, esp_err_to_name(err));
+                 ESPAGENT_SERVO_DEFAULT_GPIO, esp_err_to_name(err));
         return err;
     }
 
     ESP_LOGI(TAG, "Servo PWM updated on GPIO %d: pulse=%dus duty=%lu/8191",
-             MIMI_SERVO_DEFAULT_GPIO, pulse_us, (unsigned long)duty);
+             ESPAGENT_SERVO_DEFAULT_GPIO, pulse_us, (unsigned long)duty);
     return ESP_OK;
 }
 
@@ -91,8 +91,8 @@ esp_err_t tool_servo_set_angle(int angle)
         return ESP_ERR_INVALID_ARG;
     }
 
-    int pulse_us = MIMI_SERVO_MIN_PULSE_US
-                   + (angle * (MIMI_SERVO_MAX_PULSE_US - MIMI_SERVO_MIN_PULSE_US)) / 180;
+    int pulse_us = ESPAGENT_SERVO_MIN_PULSE_US
+                   + (angle * (ESPAGENT_SERVO_MAX_PULSE_US - ESPAGENT_SERVO_MIN_PULSE_US)) / 180;
     return tool_servo_set_pulse_us(pulse_us);
 }
 
@@ -115,12 +115,12 @@ esp_err_t tool_servo_write_execute(const char *input_json, char *output, size_t 
             return ESP_ERR_INVALID_ARG;
         }
 
-        int pulse_us = MIMI_SERVO_MIN_PULSE_US
-                       + (angle * (MIMI_SERVO_MAX_PULSE_US - MIMI_SERVO_MIN_PULSE_US)) / 180;
+        int pulse_us = ESPAGENT_SERVO_MIN_PULSE_US
+                       + (angle * (ESPAGENT_SERVO_MAX_PULSE_US - ESPAGENT_SERVO_MIN_PULSE_US)) / 180;
         esp_err_t err = tool_servo_set_pulse_us(pulse_us);
         if (err == ESP_OK) {
             snprintf(output, output_size,
-                     "OK: servo on GPIO%d set to %d degrees (pulse=%dus)", MIMI_SERVO_DEFAULT_GPIO, angle, pulse_us);
+                     "OK: servo on GPIO%d set to %d degrees (pulse=%dus)", ESPAGENT_SERVO_DEFAULT_GPIO, angle, pulse_us);
         } else {
             snprintf(output, output_size,
                      "Error: servo write failed (%s)", esp_err_to_name(err));
@@ -146,7 +146,7 @@ esp_err_t tool_servo_write_execute(const char *input_json, char *output, size_t 
         esp_err_t err = tool_servo_set_pulse_us(pulse_us);
         if (err == ESP_OK) {
             snprintf(output, output_size,
-                     "OK: servo on GPIO%d set to %dus pulse width", MIMI_SERVO_DEFAULT_GPIO, pulse_us);
+                     "OK: servo on GPIO%d set to %dus pulse width", ESPAGENT_SERVO_DEFAULT_GPIO, pulse_us);
         } else {
             snprintf(output, output_size,
                      "Error: servo write failed (%s)", esp_err_to_name(err));

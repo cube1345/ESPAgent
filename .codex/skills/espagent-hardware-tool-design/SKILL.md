@@ -1,9 +1,9 @@
 ---
-name: mimiclaw-hardware-tool-design
-description: Design or refine AI-callable hardware tools for MimiClaw on ESP32. Use when adding GPIO, WS2812, sensor, relay, or chat-controlled device actions, especially when tool naming, JSON schema design, prompt guidance, or Feishu and Telegram phrasing should make the right tool easier for the model to call.
+name: espagent-hardware-tool-design
+description: Design or refine AI-callable hardware tools for ESPAgent on ESP32. Use when adding GPIO, WS2812, sensor, relay, or chat-controlled device actions, especially when tool naming, JSON schema design, prompt guidance, or Feishu and Telegram phrasing should make the right tool easier for the model to call.
 ---
 
-# Mimiclaw Hardware Tool Design
+# ESPAgent Hardware Tool Design
 
 Design tools for natural-language selection first, then for hardware precision.
 

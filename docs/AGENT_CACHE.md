@@ -1,10 +1,10 @@
-# MimiClaw Agent Cache
+# ESPAgent Agent Cache
 
-This document records the first agent-cache update for MimiClaw on ESP32-S3.
+This document records the first agent-cache update for ESPAgent on ESP32-S3.
 
 ## Goal
 
-MimiClaw runs the agent loop on an MCU, so cache design must reduce repeated local work without adding unbounded RAM use or flash wear.
+ESPAgent runs the agent loop on an MCU, so cache design must reduce repeated local work without adding unbounded RAM use or flash wear.
 
 This update adds an application-level KV cache for agent metadata and prompt fragments. It does not implement transformer tensor KV cache; model-side KV/prompt caching remains provider-managed.
 
@@ -19,15 +19,15 @@ Values prefer PSRAM through `heap_caps_malloc(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BI
 
 ## Runtime Limits
 
-Configured in `main/mimi_config.h`:
+Configured in `main/espagent_config.h`:
 
 ```c
-#define MIMI_CACHE_MAX_ENTRIES       32
-#define MIMI_CACHE_MAX_KEY_BYTES     64
-#define MIMI_CACHE_MAX_VALUE_BYTES   4096
-#define MIMI_CACHE_MAX_TOTAL_BYTES   (24 * 1024)
-#define MIMI_CACHE_DEFAULT_TTL_S     300
-#define MIMI_CACHE_SKILLS_TTL_S      (24 * 60 * 60)
+#define ESPAGENT_CACHE_MAX_ENTRIES       32
+#define ESPAGENT_CACHE_MAX_KEY_BYTES     64
+#define ESPAGENT_CACHE_MAX_VALUE_BYTES   4096
+#define ESPAGENT_CACHE_MAX_TOTAL_BYTES   (24 * 1024)
+#define ESPAGENT_CACHE_DEFAULT_TTL_S     300
+#define ESPAGENT_CACHE_SKILLS_TTL_S      (24 * 60 * 60)
 ```
 
 These limits are deliberately conservative for ESP32-S3. The cache is useful for short strings, compact JSON, prompt fragments, tool metadata, and small tool result summaries.
@@ -64,7 +64,7 @@ void cache_clear(void);
 1. Try RAM cache.
 2. If hit, return cached skills summary.
 3. If miss or expired, scan SPIFFS and rebuild summary.
-4. Store rebuilt summary with `MIMI_CACHE_SKILLS_TTL_S`.
+4. Store rebuilt summary with `ESPAGENT_CACHE_SKILLS_TTL_S`.
 
 `write_file` and `edit_file` invalidate `prompt:skills_summary` when they change files under `/spiffs/skills/`.
 

@@ -1,6 +1,6 @@
 #include "tools/tool_sgp30.h"
 #include "drivers/sgp30.h"
-#include "mimi_config.h"
+#include "espagent_config.h"
 
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
@@ -33,7 +33,7 @@ static bool get_optional_int(cJSON *root, const char *key, int *value)
 
 
 /**
- * @brief 执行 MimiClaw 的 SGP30 空气质量读取工具。
+ * @brief 执行 ESPAgent 的 SGP30 空气质量读取工具。
  *
  * 该函数会从 JSON 输入中解析可选的总线覆盖参数，校验 GPIO 配置，
  * 在首次使用时初始化 I2C 总线，缓存总线/设备句柄以及最近一次采样结果，
@@ -63,10 +63,10 @@ esp_err_t tool_sgp30_read_air_quality_execute(const char *input_json, char *outp
         return ESP_ERR_INVALID_ARG;
     }
 
-    int sda_gpio = MIMI_SGP30_DEFAULT_SDA_GPIO;
-    int scl_gpio = MIMI_SGP30_DEFAULT_SCL_GPIO;
-    int i2c_port = MIMI_SGP30_DEFAULT_I2C_PORT;
-    int scl_hz = MIMI_SGP30_DEFAULT_SCL_HZ;
+    int sda_gpio = ESPAGENT_SGP30_DEFAULT_SDA_GPIO;
+    int scl_gpio = ESPAGENT_SGP30_DEFAULT_SCL_GPIO;
+    int i2c_port = ESPAGENT_SGP30_DEFAULT_I2C_PORT;
+    int scl_hz = ESPAGENT_SGP30_DEFAULT_SCL_HZ;
 
     (void)get_optional_int(root, "sda_gpio", &sda_gpio);
     (void)get_optional_int(root, "scl_gpio", &scl_gpio);
@@ -75,7 +75,7 @@ esp_err_t tool_sgp30_read_air_quality_execute(const char *input_json, char *outp
 
     if (!sgp30_valid_gpio_pair(sda_gpio, scl_gpio)) {
         snprintf(output, output_size,
-                 "Error: SGP30 SDA/SCL GPIOs are not configured. Set MIMI_SECRET_SGP30_SDA_GPIO and MIMI_SECRET_SGP30_SCL_GPIO, or call with {\"sda_gpio\":x,\"scl_gpio\":y}.");
+                 "Error: SGP30 SDA/SCL GPIOs are not configured. Set ESPAGENT_SECRET_SGP30_SDA_GPIO and ESPAGENT_SECRET_SGP30_SCL_GPIO, or call with {\"sda_gpio\":x,\"scl_gpio\":y}.");
         cJSON_Delete(root);
         return ESP_ERR_INVALID_STATE;
     }

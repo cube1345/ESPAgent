@@ -1,4 +1,4 @@
-# MimiClaw Architecture
+# ESPAgent Architecture
 
 > ESP32-S3 AI Agent firmware — C/FreeRTOS implementation running on bare metal (no Linux).
 
@@ -7,17 +7,17 @@
 ## System Overview
 
 ```
-Telegram App (User)
+Feishu App (User)
     │
-    │  HTTPS Long Polling
+    │  WebSocket event stream + HTTPS replies
     │
     ▼
 ┌──────────────────────────────────────────────────┐
-│               ESP32-S3 (MimiClaw)                │
+│               ESP32-S3 (ESPAgent)                │
 │                                                  │
 │   ┌─────────────┐       ┌──────────────────┐     │
-│   │  Telegram    │──────▶│   Inbound Queue  │     │
-│   │  Poller      │       └────────┬─────────┘     │
+│   │  Feishu    │──────▶│   Inbound Queue  │     │
+│   │  WS Client  │       └────────┬─────────┘     │
 │   │  (Core 0)    │               │                │
 │   └─────────────┘               ▼                │
 │                     ┌────────────────────────┐    │
@@ -43,14 +43,14 @@ Telegram App (User)
 │                         │  (Core 0)    │          │
 │                         └──┬────────┬──┘          │
 │                            │        │             │
-│                     Telegram    WebSocket          │
+│                     Feishu    WebSocket          │
 │                     sendMessage  send              │
 │                                                   │
 │   ┌──────────────────────────────────────────┐    │
 │   │  SPIFFS (12 MB)                          │    │
 │   │  /spiffs/config/  SOUL.md, USER.md       │    │
 │   │  /spiffs/memory/  MEMORY.md, YYYY-MM-DD  │    │
-│   │  /spiffs/sessions/ tg_<chat_id>.jsonl    │    │
+│   │  /spiffs/sessions/ session_<chat_id>.jsonl    │    │
 │   └──────────────────────────────────────────┘    │
 └───────────────────────────────────────────────────┘
          │
@@ -67,8 +67,8 @@ Telegram App (User)
 ## Data Flow
 
 ```
-1. User sends message on Telegram (or WebSocket)
-2. Channel poller receives message, wraps in mimi_msg_t
+1. User sends message on Feishu (or WebSocket)
+2. Channel client receives message, wraps in espagent_msg_t
 3. Message pushed to Inbound Queue (FreeRTOS xQueue)
 4. Agent Loop (Core 1) pops message:
    a. Load session history from SPIFFS (JSONL)
@@ -85,7 +85,7 @@ Telegram App (User)
    e. Save user message + final assistant text to session file
    f. Push response to Outbound Queue
 5. Outbound Dispatch (Core 0) pops response:
-   a. Route by channel field ("telegram" → sendMessage, "websocket" → WS frame)
+   a. Route by channel field ("feishu" → sendMessage, "websocket" → WS frame)
 6. User receives reply
 ```
 
@@ -95,22 +95,27 @@ Telegram App (User)
 
 ```
 main/
-├── mimi.c                  Entry point — app_main() orchestrates init + startup
-├── mimi_config.h           All compile-time constants + build-time secrets include
-├── mimi_secrets.h          Build-time credentials (gitignored, highest priority)
-├── mimi_secrets.h.example  Template for mimi_secrets.h
+├── espagent.c                  Entry point — app_main() banner + startup phases
+├── espagent_config.h           All compile-time constants + build-time secrets include
+├── espagent_secrets.h          Build-time credentials (gitignored, highest priority)
+├── espagent_secrets.h.example  Template for espagent_secrets.h
+│
+├── app/
+│   ├── espagent_app.h      Application orchestration API
+│   └── espagent_app.c      Subsystem init, local services, WiFi/onboarding, network services
 │
 ├── bus/
-│   ├── message_bus.h       mimi_msg_t struct, queue API
+│   ├── message_bus.h       espagent_msg_t struct, queue API
 │   └── message_bus.c       Two FreeRTOS queues: inbound + outbound
 │
 ├── wifi/
 │   ├── wifi_manager.h      WiFi STA lifecycle API
 │   └── wifi_manager.c      Event handler, exponential backoff
 │
-├── telegram/
-│   ├── telegram_bot.h      Bot init/start, send_message API
-│   └── telegram_bot.c      Long polling loop, JSON parsing, message splitting
+├── channels/
+│   └── feishu/
+│       ├── feishu_bot.h    Bot init/start, send_message API
+│       └── feishu_bot.c    WebSocket receive loop, JSON parsing, replies
 │
 ├── llm/
 │   ├── llm_proxy.h         llm_chat() + llm_chat_tools() API, tool_use types
@@ -126,7 +131,11 @@ main/
 │   ├── tool_registry.h     Tool definition struct, register/dispatch API
 │   ├── tool_registry.c     Tool registration, JSON schema builder, dispatch by name
 │   ├── tool_web_search.h   Web search tool API
-│   └── tool_web_search.c   Brave Search API via HTTPS (direct + proxy)
+│   ├── tool_web_search.c   Tavily/Brave Search API via HTTPS
+│   ├── tool_gpio.c         GPIO / WS2812 status light tools
+│   ├── tool_servo.c        Servo control tool
+│   ├── tool_environment.c  Combined environment sensor tool
+│   └── tool_*.c            Sensor, file, cron, audio, and time tools
 │
 ├── memory/
 │   ├── memory_store.h      Long-term + daily memory API
@@ -141,6 +150,41 @@ main/
 ├── proxy/
 │   ├── http_proxy.h        Proxy connection API
 │   └── http_proxy.c        HTTP CONNECT tunnel + TLS via esp_tls
+│
+├── cache/
+│   ├── cache_store.h       Runtime KV cache API
+│   └── cache_store.c       Prompt and skill summary cache
+│
+├── skills/
+│   ├── skill_loader.h      SPIFFS skill summary API
+│   └── skill_loader.c      Load markdown skills into prompt summaries
+│
+├── cron/
+│   ├── cron_service.h      Scheduled trigger API
+│   └── cron_service.c      FreeRTOS timer backed agent triggers
+│
+├── heartbeat/
+│   ├── heartbeat.h         Heartbeat service API
+│   └── heartbeat.c         Periodic background checks
+│
+├── drivers/
+│   ├── sgp30.c             Air-quality sensor driver
+│   ├── aht10.c             Temperature/humidity sensor driver
+│   ├── bh1750.c            Light sensor driver
+│   └── max98357.c          I2S audio output driver
+│
+├── espnow/
+│   ├── espnow_sender.h     ESP-NOW telemetry API
+│   └── espnow_sender.c     Peer setup and payload send path
+│
+├── sensors/
+│   ├── sensor_mqtt.h       Sensor publishing API
+│   └── sensor_mqtt.c       Periodic telemetry publishing
+│
+├── onboard/
+│   ├── wifi_onboard.h      Local setup/admin AP API
+│   ├── wifi_onboard.c      Captive portal and admin hotspot
+│   └── onboard_html.h      Embedded setup page HTML
 │
 ├── cli/
 │   ├── serial_cli.h        CLI init API
@@ -157,9 +201,9 @@ main/
 
 | Task               | Core | Priority | Stack  | Description                          |
 |--------------------|------|----------|--------|--------------------------------------|
-| `tg_poll`          | 0    | 5        | 12 KB  | Telegram long polling (30s timeout)  |
+| `feishu_ws`        | 0    | 5        | 12 KB  | Feishu WebSocket receive loop        |
 | `agent_loop`       | 1    | 6        | 12 KB  | Message processing + Claude API call |
-| `outbound`         | 0    | 5        | 8 KB   | Route responses to Telegram / WS     |
+| `outbound`         | 0    | 5        | 8 KB   | Route responses to Feishu / WS     |
 | `serial_cli`       | 0    | 3        | 4 KB   | USB serial console REPL              |
 | httpd (internal)   | 0    | 5        | —      | WebSocket server (esp_http_server)   |
 | wifi_event (IDF)   | 0    | 8        | —      | WiFi event handling (ESP-IDF)        |
@@ -174,7 +218,7 @@ main/
 |------------------------------------|----------------|----------|
 | FreeRTOS task stacks               | Internal SRAM  | ~40 KB   |
 | WiFi buffers                       | Internal SRAM  | ~30 KB   |
-| TLS connections x2 (Telegram + Claude) | PSRAM      | ~120 KB  |
+| TLS connections x2 (Feishu + Claude) | PSRAM      | ~120 KB  |
 | JSON parse buffers                 | PSRAM          | ~32 KB   |
 | Session history cache              | PSRAM          | ~32 KB   |
 | System prompt buffer               | PSRAM          | ~16 KB   |
@@ -212,7 +256,7 @@ SPIFFS is a flat filesystem — no real directories. Files use path-like names.
 /spiffs/config/USER.md          User profile
 /spiffs/memory/MEMORY.md        Long-term persistent memory
 /spiffs/memory/2026-02-05.md    Daily notes (one file per day)
-/spiffs/sessions/tg_12345.jsonl Session history (one file per Telegram chat)
+/spiffs/sessions/session_12345.jsonl Session history (one file per Feishu chat)
 ```
 
 Session files are JSONL (one JSON object per line):
@@ -225,33 +269,35 @@ Session files are JSONL (one JSON object per line):
 
 ## Configuration
 
-All configuration is done exclusively through `mimi_secrets.h` at build time. There is no runtime configuration — changing any setting requires `idf.py fullclean && idf.py build`.
+Configuration uses build-time defaults from `espagent_secrets.h`, with selected runtime overrides stored in NVS through the serial CLI.
 
 | Define                       | Description                             |
 |------------------------------|-----------------------------------------|
-| `MIMI_SECRET_WIFI_SSID`     | WiFi SSID                               |
-| `MIMI_SECRET_WIFI_PASS`     | WiFi password                           |
-| `MIMI_SECRET_TG_TOKEN`      | Telegram Bot API token                  |
-| `MIMI_SECRET_API_KEY`       | Anthropic API key                       |
-| `MIMI_SECRET_MODEL`         | Model ID (default: claude-opus-4-6)     |
-| `MIMI_SECRET_PROXY_HOST`    | HTTP proxy hostname/IP (optional)       |
-| `MIMI_SECRET_PROXY_PORT`    | HTTP proxy port (optional)              |
-| `MIMI_SECRET_SEARCH_KEY`    | Brave Search API key (optional)         |
+| `ESPAGENT_SECRET_WIFI_SSID`     | WiFi SSID                               |
+| `ESPAGENT_SECRET_WIFI_PASS`     | WiFi password                           |
+| `ESPAGENT_SECRET_FEISHU_APP_ID`      | Feishu App ID                         |
+| `ESPAGENT_SECRET_FEISHU_APP_SECRET`  | Feishu App Secret                     |
+| `ESPAGENT_SECRET_API_KEY`       | LLM provider API key                    |
+| `ESPAGENT_SECRET_MODEL`         | Model ID (default: claude-opus-4-6)     |
+| `ESPAGENT_SECRET_PROXY_HOST`    | HTTP proxy hostname/IP (optional)       |
+| `ESPAGENT_SECRET_PROXY_PORT`    | HTTP proxy port (optional)              |
+| `ESPAGENT_SECRET_SEARCH_KEY`    | Brave Search API key (optional)         |
+| `ESPAGENT_SECRET_TAVILY_KEY`    | Tavily Search API key (optional)        |
 
-NVS is still initialized (required by ESP-IDF WiFi internals) but is not used for application configuration.
+NVS is also used for runtime overrides such as Wi-Fi, Feishu credentials, LLM settings, proxy settings, and search API keys.
 
 ---
 
 ## Message Bus Protocol
 
-The internal message bus uses two FreeRTOS queues carrying `mimi_msg_t`:
+The internal message bus uses two FreeRTOS queues carrying `espagent_msg_t`:
 
 ```c
 typedef struct {
-    char channel[16];   // "telegram", "websocket", "cli"
-    char chat_id[32];   // Telegram chat ID or WS client ID
+    char channel[16];   // "feishu", "websocket", "cli"
+    char chat_id[32];   // Feishu chat ID or WS client ID
     char *content;      // Heap-allocated text (ownership transferred)
-} mimi_msg_t;
+} espagent_msg_t;
 ```
 
 - **Inbound queue**: channels → agent loop (depth: 8)
@@ -341,7 +387,7 @@ app_main()
   ├── session_mgr_init()
   ├── wifi_manager_init()           Init WiFi STA mode + event handlers
   ├── http_proxy_init()             Load proxy config from build-time secrets
-  ├── telegram_bot_init()           Load bot token from build-time secrets
+  ├── feishu_bot_init()           Load Feishu app credentials from build-time secrets
   ├── llm_proxy_init()              Load API key + model from build-time secrets
   ├── tool_registry_init()          Register tools, build tools JSON
   ├── agent_loop_init()
@@ -351,7 +397,7 @@ app_main()
   │   └── wifi_manager_wait_connected(30s)
   │
   └── [if WiFi connected]
-      ├── telegram_bot_start()      Launch tg_poll task (Core 0)
+      ├── feishu_bot_start()      Launch Feishu WebSocket task (Core 0)
       ├── agent_loop_start()        Launch agent_loop task (Core 1)
       ├── ws_server_start()         Start httpd on port 18789
       └── outbound_dispatch task    Launch outbound task (Core 0)
@@ -363,7 +409,7 @@ If WiFi credentials are missing or connection times out, the CLI remains availab
 
 ## Serial CLI Commands
 
-The CLI provides debug and maintenance commands only. All configuration is done via `mimi_secrets.h`.
+The CLI provides debug and maintenance commands only. All configuration is done via `espagent_secrets.h`.
 
 | Command                        | Description                          |
 |--------------------------------|--------------------------------------|
@@ -378,21 +424,13 @@ The CLI provides debug and maintenance commands only. All configuration is done 
 
 ---
 
-## Nanobot Reference Mapping
+## ESPAgent Module Responsibilities
 
-| Nanobot Module              | MimiClaw Equivalent            | Notes                        |
-|-----------------------------|--------------------------------|------------------------------|
-| `agent/loop.py`             | `agent/agent_loop.c`           | ReAct loop with tool use     |
-| `agent/context.py`          | `agent/context_builder.c`      | Loads SOUL.md + USER.md + memory + tool guidance |
-| `agent/memory.py`           | `memory/memory_store.c`        | MEMORY.md + daily notes      |
-| `session/manager.py`        | `memory/session_mgr.c`         | JSONL per chat, ring buffer  |
-| `channels/telegram.py`      | `telegram/telegram_bot.c`      | Raw HTTP, no python-telegram-bot |
-| `bus/events.py` + `queue.py`| `bus/message_bus.c`            | FreeRTOS queues vs asyncio   |
-| `providers/litellm_provider.py` | `llm/llm_proxy.c`         | Direct Anthropic API only    |
-| `config/schema.py`          | `mimi_config.h` + `mimi_secrets.h` | Build-time secrets only  |
-| `cli/commands.py`           | `cli/serial_cli.c`             | esp_console REPL             |
-| `agent/tools/*`             | `tools/tool_registry.c` + `tool_web_search.c` | web_search via Brave API |
-| `agent/subagent.py`         | *(not yet implemented)*        | See TODO.md                  |
-| `agent/skills.py`           | *(not yet implemented)*        | See TODO.md                  |
-| `cron/service.py`           | *(not yet implemented)*        | See TODO.md                  |
-| `heartbeat/service.py`      | *(not yet implemented)*        | See TODO.md                  |
+| Area | Modules | Responsibility |
+|------|---------|----------------|
+| Boot and lifecycle | `espagent.c`, `espagent_config.h` | Initialize storage, Wi-Fi, channels, agent services, hardware monitors, and CLI |
+| Message routing | `bus/`, `channels/feishu/`, `gateway/` | Normalize Feishu/WebSocket/system messages into queues and route outbound replies |
+| Agent runtime | `agent/`, `llm/`, `tools/` | Build prompts, call the LLM, parse tool-use blocks, execute tools, and return final text |
+| Persistence | `memory/`, `cache/`, `skills/`, `spiffs_data/` | Store sessions, long-term memory, daily notes, skill summaries, and cached prompt fragments |
+| Hardware access | `drivers/`, `tools/`, `sensors/`, `espnow/` | Keep sensor/peripheral I/O bounded and expose narrow AI-callable tools |
+| Operations | `cli/`, `onboard/`, `ota/`, `proxy/` | Support local setup, diagnostics, OTA updates, and proxied HTTPS access |

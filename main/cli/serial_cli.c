@@ -1,10 +1,10 @@
 #include "serial_cli.h"
-#include "mimi_config.h"
+#include "espagent_config.h"
 #include "wifi/wifi_manager.h"
-#include "channels/telegram/telegram_bot.h"
 #include "channels/feishu/feishu_bot.h"
 #include "llm/llm_proxy.h"
 #include "cache/cache_store.h"
+#include "bus/message_bus.h"
 #include "memory/memory_store.h"
 #include "memory/session_mgr.h"
 #include "proxy/http_proxy.h"
@@ -68,24 +68,6 @@ static int cmd_wifi_status(int argc, char **argv)
 {
     printf("WiFi connected: %s\n", wifi_manager_is_connected() ? "yes" : "no");
     printf("IP: %s\n", wifi_manager_get_ip());
-    return 0;
-}
-
-/* --- set_tg_token command --- */
-static struct {
-    struct arg_str *token;
-    struct arg_end *end;
-} tg_token_args;
-
-static int cmd_set_tg_token(int argc, char **argv)
-{
-    int nerrors = arg_parse(argc, argv, (void **)&tg_token_args);
-    if (nerrors != 0) {
-        arg_print_errors(stderr, tg_token_args.end, argv[0]);
-        return 1;
-    }
-    telegram_set_token(tg_token_args.token->sval[0]);
-    printf("Telegram bot token saved.\n");
     return 0;
 }
 
@@ -266,9 +248,9 @@ static int cmd_max98357_test(int argc, char **argv)
     max98357_config_t cfg;
     max98357_default_config(&cfg);
 
-    uint32_t frequency_hz = MIMI_MAX98357_DEFAULT_TONE_HZ;
-    uint32_t duration_ms = MIMI_MAX98357_DEFAULT_DURATION_MS;
-    uint8_t volume_pct = MIMI_MAX98357_DEFAULT_VOLUME_PCT;
+    uint32_t frequency_hz = ESPAGENT_MAX98357_DEFAULT_TONE_HZ;
+    uint32_t duration_ms = ESPAGENT_MAX98357_DEFAULT_DURATION_MS;
+    uint8_t volume_pct = ESPAGENT_MAX98357_DEFAULT_VOLUME_PCT;
 
     if (argc == 4) {
         cfg.bclk_gpio = (gpio_num_t)strtol(argv[1], NULL, 10);
@@ -317,8 +299,8 @@ static int cmd_cache_stats(int argc, char **argv)
     uint32_t total_lookups = stats.hits + stats.misses;
     uint32_t hit_rate_x100 = total_lookups ? (stats.hits * 10000U) / total_lookups : 0;
 
-    printf("Cache entries:   %u/%u\n", (unsigned)stats.entries, (unsigned)MIMI_CACHE_MAX_ENTRIES);
-    printf("Cache bytes:     %u/%u\n", (unsigned)stats.bytes, (unsigned)MIMI_CACHE_MAX_TOTAL_BYTES);
+    printf("Cache entries:   %u/%u\n", (unsigned)stats.entries, (unsigned)ESPAGENT_CACHE_MAX_ENTRIES);
+    printf("Cache bytes:     %u/%u\n", (unsigned)stats.bytes, (unsigned)ESPAGENT_CACHE_MAX_TOTAL_BYTES);
     printf("Cache hits:      %u\n", (unsigned)stats.hits);
     printf("Cache misses:    %u\n", (unsigned)stats.misses);
     printf("Cache hit rate:  %u.%02u%% (%u lookups)\n",
@@ -456,7 +438,7 @@ static int cmd_skill_list(int argc, char **argv)
 
     size_t n = skill_loader_build_summary(buf, 4096);
     if (n == 0) {
-        printf("No skills found under " MIMI_SKILLS_PREFIX ".\n");
+        printf("No skills found under " ESPAGENT_SKILLS_PREFIX ".\n");
     } else {
         printf("=== Skills ===\n%s", buf);
     }
@@ -483,9 +465,9 @@ static bool build_skill_path(const char *name, char *out, size_t out_size)
     if (strchr(name, '/') != NULL || strchr(name, '\\') != NULL) return false;
 
     if (has_md_suffix(name)) {
-        snprintf(out, out_size, MIMI_SKILLS_PREFIX "%s", name);
+        snprintf(out, out_size, ESPAGENT_SKILLS_PREFIX "%s", name);
     } else {
-        snprintf(out, out_size, MIMI_SKILLS_PREFIX "%s.md", name);
+        snprintf(out, out_size, ESPAGENT_SKILLS_PREFIX "%s.md", name);
     }
     return true;
 }
@@ -551,9 +533,9 @@ static int cmd_skill_search(int argc, char **argv)
     }
 
     const char *keyword = skill_search_args.keyword->sval[0];
-    DIR *dir = opendir(MIMI_SPIFFS_BASE);
+    DIR *dir = opendir(ESPAGENT_SPIFFS_BASE);
     if (!dir) {
-        printf("Cannot open " MIMI_SPIFFS_BASE ".\n");
+        printf("Cannot open " ESPAGENT_SPIFFS_BASE ".\n");
         return 1;
     }
 
@@ -571,7 +553,7 @@ static int cmd_skill_search(int argc, char **argv)
         if (strcmp(name + name_len - 3, ".md") != 0) continue;
 
         char full_path[296];
-        snprintf(full_path, sizeof(full_path), MIMI_SPIFFS_BASE "/%s", name);
+        snprintf(full_path, sizeof(full_path), ESPAGENT_SPIFFS_BASE "/%s", name);
 
         bool file_matched = contains_nocase(name, keyword);
         int matched_line = 0;
@@ -670,16 +652,15 @@ static void print_config_u16(const char *label, const char *ns, const char *key,
 static int cmd_config_show(int argc, char **argv)
 {
     printf("=== Current Configuration ===\n");
-    print_config("WiFi SSID",  MIMI_NVS_WIFI,   MIMI_NVS_KEY_SSID,     MIMI_SECRET_WIFI_SSID,  false);
-    print_config("WiFi Pass",  MIMI_NVS_WIFI,   MIMI_NVS_KEY_PASS,     MIMI_SECRET_WIFI_PASS,  true);
-    print_config("TG Token",   MIMI_NVS_TG,     MIMI_NVS_KEY_TG_TOKEN, MIMI_SECRET_TG_TOKEN,   true);
-    print_config("API Key",    MIMI_NVS_LLM,    MIMI_NVS_KEY_API_KEY,  MIMI_SECRET_API_KEY,    true);
-    print_config("Model",      MIMI_NVS_LLM,    MIMI_NVS_KEY_MODEL,    MIMI_SECRET_MODEL,      false);
-    print_config("Provider",   MIMI_NVS_LLM,    MIMI_NVS_KEY_PROVIDER, MIMI_SECRET_MODEL_PROVIDER, false);
-    print_config("Proxy Host", MIMI_NVS_PROXY,  MIMI_NVS_KEY_PROXY_HOST, MIMI_SECRET_PROXY_HOST, false);
-    print_config_u16("Proxy Port", MIMI_NVS_PROXY, MIMI_NVS_KEY_PROXY_PORT, MIMI_SECRET_PROXY_PORT);
-    print_config("Search Key", MIMI_NVS_SEARCH, MIMI_NVS_KEY_API_KEY,  MIMI_SECRET_SEARCH_KEY, true);
-    print_config("Tavily Key", MIMI_NVS_SEARCH, MIMI_NVS_KEY_TAVILY_KEY, MIMI_SECRET_TAVILY_KEY, true);
+    print_config("WiFi SSID",  ESPAGENT_NVS_WIFI,   ESPAGENT_NVS_KEY_SSID,     ESPAGENT_SECRET_WIFI_SSID,  false);
+    print_config("WiFi Pass",  ESPAGENT_NVS_WIFI,   ESPAGENT_NVS_KEY_PASS,     ESPAGENT_SECRET_WIFI_PASS,  true);
+    print_config("API Key",    ESPAGENT_NVS_LLM,    ESPAGENT_NVS_KEY_API_KEY,  ESPAGENT_SECRET_API_KEY,    true);
+    print_config("Model",      ESPAGENT_NVS_LLM,    ESPAGENT_NVS_KEY_MODEL,    ESPAGENT_SECRET_MODEL,      false);
+    print_config("Provider",   ESPAGENT_NVS_LLM,    ESPAGENT_NVS_KEY_PROVIDER, ESPAGENT_SECRET_MODEL_PROVIDER, false);
+    print_config("Proxy Host", ESPAGENT_NVS_PROXY,  ESPAGENT_NVS_KEY_PROXY_HOST, ESPAGENT_SECRET_PROXY_HOST, false);
+    print_config_u16("Proxy Port", ESPAGENT_NVS_PROXY, ESPAGENT_NVS_KEY_PROXY_PORT, ESPAGENT_SECRET_PROXY_PORT);
+    print_config("Search Key", ESPAGENT_NVS_SEARCH, ESPAGENT_NVS_KEY_API_KEY,  ESPAGENT_SECRET_SEARCH_KEY, true);
+    print_config("Tavily Key", ESPAGENT_NVS_SEARCH, ESPAGENT_NVS_KEY_TAVILY_KEY, ESPAGENT_SECRET_TAVILY_KEY, true);
     printf("=============================\n");
     return 0;
 }
@@ -688,9 +669,9 @@ static int cmd_config_show(int argc, char **argv)
 static int cmd_config_reset(int argc, char **argv)
 {
     const char *namespaces[] = {
-        MIMI_NVS_WIFI, MIMI_NVS_TG, MIMI_NVS_LLM, MIMI_NVS_PROXY, MIMI_NVS_SEARCH
+        ESPAGENT_NVS_WIFI, ESPAGENT_NVS_LLM, ESPAGENT_NVS_PROXY, ESPAGENT_NVS_SEARCH
     };
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 4; i++) {
         nvs_handle_t nvs;
         if (nvs_open(namespaces[i], NVS_READWRITE, &nvs) == ESP_OK) {
             nvs_erase_all(nvs);
@@ -748,6 +729,71 @@ static int cmd_tool_exec(int argc, char **argv)
     printf("%s\n", output[0] ? output : "(empty)");
     free(output);
     return (err == ESP_OK) ? 0 : 1;
+}
+
+static int cmd_inject_msg(int argc, char **argv)
+{
+    if (argc < 4) {
+        printf("Usage: inject_msg <channel> <chat_id> <text>\n");
+        return 1;
+    }
+
+    espagent_msg_t msg = {0};
+    strncpy(msg.channel, argv[1], sizeof(msg.channel) - 1);
+    strncpy(msg.chat_id, argv[2], sizeof(msg.chat_id) - 1);
+
+    size_t text_len = 0;
+    for (int i = 3; i < argc; i++) {
+        text_len += strlen(argv[i]) + 1;
+    }
+
+    msg.content = calloc(1, text_len + 1);
+    if (!msg.content) {
+        printf("Out of memory.\n");
+        return 1;
+    }
+
+    for (int i = 3; i < argc; i++) {
+        if (i > 3) {
+            strncat(msg.content, " ", text_len - strlen(msg.content));
+        }
+        strncat(msg.content, argv[i], text_len - strlen(msg.content));
+    }
+
+    esp_err_t err = message_bus_push_inbound(&msg);
+    if (err != ESP_OK) {
+        free(msg.content);
+        printf("inject_msg status: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    printf("inject_msg status: ESP_OK (%s:%s)\n", msg.channel, msg.chat_id);
+    return 0;
+}
+
+static int cmd_inject_search_zh(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+
+    espagent_msg_t msg = {0};
+    strncpy(msg.channel, "system", sizeof(msg.channel) - 1);
+    strncpy(msg.chat_id, "debug", sizeof(msg.chat_id) - 1);
+    msg.content = strdup("请联网搜索 ESP-IDF 最新版本 并总结一句话");
+    if (!msg.content) {
+        printf("Out of memory.\n");
+        return 1;
+    }
+
+    esp_err_t err = message_bus_push_inbound(&msg);
+    if (err != ESP_OK) {
+        free(msg.content);
+        printf("inject_search_zh status: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    printf("inject_search_zh status: ESP_OK (system:debug)\n");
+    return 0;
 }
 
 /* --- web_search command --- */
@@ -893,7 +939,7 @@ esp_err_t serial_cli_init(void)
 {
     esp_console_repl_t *repl = NULL;
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
-    repl_config.prompt = "mimi> ";
+    repl_config.prompt = "ESPAgent> ";
     repl_config.max_cmdline_length = 256;
 
 #if CONFIG_ESP_CONSOLE_UART_DEFAULT || CONFIG_ESP_CONSOLE_UART_CUSTOM
@@ -938,17 +984,6 @@ esp_err_t serial_cli_init(void)
     };
     esp_console_cmd_register(&wifi_scan_cmd);
 
-    /* set_tg_token */
-    tg_token_args.token = arg_str1(NULL, NULL, "<token>", "Telegram bot token");
-    tg_token_args.end = arg_end(1);
-    esp_console_cmd_t tg_token_cmd = {
-        .command = "set_tg_token",
-        .help = "Set Telegram bot token",
-        .func = &cmd_set_tg_token,
-        .argtable = &tg_token_args,
-    };
-    esp_console_cmd_register(&tg_token_cmd);
-
     /* set_feishu_creds */
     feishu_creds_args.app_id = arg_str1(NULL, NULL, "<app_id>", "Feishu App ID");
     feishu_creds_args.app_secret = arg_str1(NULL, NULL, "<app_secret>", "Feishu App Secret");
@@ -989,7 +1024,7 @@ esp_err_t serial_cli_init(void)
     model_args.end = arg_end(1);
     esp_console_cmd_t model_cmd = {
         .command = "set_model",
-        .help = "Set LLM model (default: " MIMI_LLM_DEFAULT_MODEL ")",
+        .help = "Set LLM model (default: " ESPAGENT_LLM_DEFAULT_MODEL ")",
         .func = &cmd_set_model,
         .argtable = &model_args,
     };
@@ -1000,7 +1035,7 @@ esp_err_t serial_cli_init(void)
     provider_args.end = arg_end(1);
     esp_console_cmd_t provider_cmd = {
         .command = "set_model_provider",
-        .help = "Set LLM model provider (default: " MIMI_LLM_PROVIDER_DEFAULT ")",
+        .help = "Set LLM model provider (default: " ESPAGENT_LLM_PROVIDER_DEFAULT ")",
         .func = &cmd_set_model_provider,
         .argtable = &provider_args,
     };
@@ -1009,7 +1044,7 @@ esp_err_t serial_cli_init(void)
     /* skill_list */
     esp_console_cmd_t skill_list_cmd = {
         .command = "skill_list",
-        .help = "List installed skills from " MIMI_SKILLS_PREFIX,
+        .help = "List installed skills from " ESPAGENT_SKILLS_PREFIX,
         .func = &cmd_skill_list,
     };
     esp_console_cmd_register(&skill_list_cmd);
@@ -1196,6 +1231,22 @@ esp_err_t serial_cli_init(void)
         .func = &cmd_tool_exec,
     };
     esp_console_cmd_register(&tool_exec_cmd);
+
+    /* inject_msg */
+    esp_console_cmd_t inject_msg_cmd = {
+        .command = "inject_msg",
+        .help = "Inject a message into agent loop: inject_msg <channel> <chat_id> <text>",
+        .func = &cmd_inject_msg,
+    };
+    esp_console_cmd_register(&inject_msg_cmd);
+
+    /* inject_search_zh */
+    esp_console_cmd_t inject_search_zh_cmd = {
+        .command = "inject_search_zh",
+        .help = "Inject a fixed Chinese web-search request into agent loop",
+        .func = &cmd_inject_search_zh,
+    };
+    esp_console_cmd_register(&inject_search_zh_cmd);
 
     /* web_search */
     web_search_args.query = arg_str1(NULL, NULL, "<query>", "Search query");

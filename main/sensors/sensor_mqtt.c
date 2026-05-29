@@ -1,6 +1,6 @@
 #include "sensors/sensor_mqtt.h"
 
-#include "mimi_config.h"
+#include "espagent_config.h"
 
 #include "driver/gpio.h"
 #include "driver/uart.h"
@@ -25,7 +25,7 @@ static const char *TAG = "sensor_mqtt";
 
 #define DHT22_MAX_RETRIES      3
 #define MQTT_BUF_SIZE          512
-#define MQTT_CLIENT_ID         "mimiclaw-esp32"
+#define MQTT_CLIENT_ID         "ESPAgent-esp32"
 #define MQTT_KEEPALIVE_S       30
 #define MHZ19_CMD_LEN          9
 #define MHZ19_UART_BUF_SIZE    128
@@ -46,7 +46,7 @@ static int wait_level_timeout(int pin, int level, int timeout_us)
 
 static esp_err_t dht22_read(float *temperature, float *humidity)
 {
-    const int pin = MIMI_SENSOR_DHT22_GPIO;
+    const int pin = ESPAGENT_SENSOR_DHT22_GPIO;
     uint8_t data[5] = {0};
 
     gpio_config_t cfg = {
@@ -142,7 +142,7 @@ static esp_err_t mhz19_uart_init(void)
         return ESP_OK;
     }
 
-    if (MIMI_SENSOR_MHZ19_RX_GPIO < 0 || MIMI_SENSOR_MHZ19_TX_GPIO < 0) {
+    if (ESPAGENT_SENSOR_MHZ19_RX_GPIO < 0 || ESPAGENT_SENSOR_MHZ19_TX_GPIO < 0) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -154,13 +154,13 @@ static esp_err_t mhz19_uart_init(void)
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
-    uart_port_t uart_num = (uart_port_t)MIMI_SENSOR_MHZ19_UART_NUM;
+    uart_port_t uart_num = (uart_port_t)ESPAGENT_SENSOR_MHZ19_UART_NUM;
     ESP_RETURN_ON_ERROR(uart_driver_install(uart_num, MHZ19_UART_BUF_SIZE, 0, 0, NULL, 0),
                         TAG, "install MH-Z19 UART failed");
     ESP_RETURN_ON_ERROR(uart_param_config(uart_num, &cfg), TAG, "configure MH-Z19 UART failed");
     ESP_RETURN_ON_ERROR(uart_set_pin(uart_num,
-                                     MIMI_SENSOR_MHZ19_TX_GPIO,
-                                     MIMI_SENSOR_MHZ19_RX_GPIO,
+                                     ESPAGENT_SENSOR_MHZ19_TX_GPIO,
+                                     ESPAGENT_SENSOR_MHZ19_RX_GPIO,
                                      UART_PIN_NO_CHANGE,
                                      UART_PIN_NO_CHANGE),
                         TAG, "set MH-Z19 UART pins failed");
@@ -175,7 +175,7 @@ static esp_err_t mhz19_read_co2(int *co2_ppm)
 
     static const uint8_t cmd[MHZ19_CMD_LEN] = {0xFF, 0x01, 0x86, 0, 0, 0, 0, 0, 0x79};
     uint8_t resp[MHZ19_CMD_LEN] = {0};
-    uart_port_t uart_num = (uart_port_t)MIMI_SENSOR_MHZ19_UART_NUM;
+    uart_port_t uart_num = (uart_port_t)ESPAGENT_SENSOR_MHZ19_UART_NUM;
 
     uart_flush_input(uart_num);
     int written = uart_write_bytes(uart_num, (const char *)cmd, sizeof(cmd));
@@ -301,11 +301,11 @@ static int mqtt_connect_tcp(void)
     };
     struct addrinfo *res = NULL;
     char port_str[8];
-    snprintf(port_str, sizeof(port_str), "%d", MIMI_SENSOR_MQTT_PORT);
+    snprintf(port_str, sizeof(port_str), "%d", ESPAGENT_SENSOR_MQTT_PORT);
 
-    int err = getaddrinfo(MIMI_SENSOR_MQTT_BROKER, port_str, &hints, &res);
+    int err = getaddrinfo(ESPAGENT_SENSOR_MQTT_BROKER, port_str, &hints, &res);
     if (err != 0 || !res) {
-        ESP_LOGW(TAG, "MQTT broker resolve failed: %s", MIMI_SENSOR_MQTT_BROKER);
+        ESP_LOGW(TAG, "MQTT broker resolve failed: %s", ESPAGENT_SENSOR_MQTT_BROKER);
         return -1;
     }
 
@@ -381,10 +381,10 @@ static esp_err_t publish_sensor_data(int fd)
              "{\"temp\":%.1f,\"humidity\":%.1f,\"co2\":%d}",
              (double)temp, (double)humidity, co2);
 
-    if (mqtt_publish(fd, MIMI_SENSOR_MQTT_TOPIC_DATA, json) != 0) {
+    if (mqtt_publish(fd, ESPAGENT_SENSOR_MQTT_TOPIC_DATA, json) != 0) {
         return ESP_FAIL;
     }
-    ESP_LOGI(TAG, "MQTT publish %s: %s", MIMI_SENSOR_MQTT_TOPIC_DATA, json);
+    ESP_LOGI(TAG, "MQTT publish %s: %s", ESPAGENT_SENSOR_MQTT_TOPIC_DATA, json);
     return ESP_OK;
 }
 
@@ -403,9 +403,9 @@ static void sensor_mqtt_task(void *arg)
             continue;
         }
 
-        ESP_LOGI(TAG, "MQTT connected to %s:%d", MIMI_SENSOR_MQTT_BROKER, MIMI_SENSOR_MQTT_PORT);
-        mqtt_subscribe(fd, MIMI_SENSOR_MQTT_TOPIC_ANALYSIS, 1);
-        mqtt_subscribe(fd, MIMI_SENSOR_MQTT_TOPIC_ALERT, 2);
+        ESP_LOGI(TAG, "MQTT connected to %s:%d", ESPAGENT_SENSOR_MQTT_BROKER, ESPAGENT_SENSOR_MQTT_PORT);
+        mqtt_subscribe(fd, ESPAGENT_SENSOR_MQTT_TOPIC_ANALYSIS, 1);
+        mqtt_subscribe(fd, ESPAGENT_SENSOR_MQTT_TOPIC_ALERT, 2);
 
         while (1) {
             mqtt_poll_inbound(fd);
@@ -414,21 +414,21 @@ static void sensor_mqtt_task(void *arg)
                 close(fd);
                 break;
             }
-            vTaskDelay(pdMS_TO_TICKS(MIMI_SENSOR_MQTT_PUBLISH_INTERVAL_MS));
+            vTaskDelay(pdMS_TO_TICKS(ESPAGENT_SENSOR_MQTT_PUBLISH_INTERVAL_MS));
         }
     }
 }
 
 esp_err_t sensor_mqtt_start(void)
 {
-    if (MIMI_SENSOR_MQTT_BROKER[0] == '\0') {
-        ESP_LOGI(TAG, "Sensor MQTT disabled: MIMI_SECRET_SENSOR_MQTT_BROKER is empty");
+    if (ESPAGENT_SENSOR_MQTT_BROKER[0] == '\0') {
+        ESP_LOGI(TAG, "Sensor MQTT disabled: ESPAGENT_SECRET_SENSOR_MQTT_BROKER is empty");
         return ESP_OK;
     }
 
     BaseType_t ok = xTaskCreatePinnedToCore(sensor_mqtt_task, "sensor_mqtt",
-                                           MIMI_SENSOR_MQTT_STACK, NULL,
-                                           MIMI_SENSOR_MQTT_PRIO, NULL,
-                                           MIMI_SENSOR_MQTT_CORE);
+                                           ESPAGENT_SENSOR_MQTT_STACK, NULL,
+                                           ESPAGENT_SENSOR_MQTT_PRIO, NULL,
+                                           ESPAGENT_SENSOR_MQTT_CORE);
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }

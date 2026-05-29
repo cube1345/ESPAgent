@@ -1,9 +1,9 @@
 ---
-name: mimiclaw-agent-architecture
-description: Navigate and extend the MimiClaw ESP32-S3 firmware architecture. Use when adding or debugging channels, agent-loop behavior, tool registration, prompt construction, memory, cron, onboarding, or when deciding which files in this repo should change for a new AI or hardware capability.
+name: espagent-agent-architecture
+description: Navigate and extend the ESPAgent ESP32-S3 firmware architecture. Use when adding or debugging channels, agent-loop behavior, tool registration, prompt construction, memory, cron, onboarding, or when deciding which files in this repo should change for a new AI or hardware capability.
 ---
 
-# Mimiclaw Agent Architecture
+# ESPAgent Agent Architecture
 
 Place changes in the right module before editing code.
 
@@ -23,11 +23,11 @@ Place changes in the right module before editing code.
 ## Repo Hotspots
 
 - Entry point and boot sequence:
-  [`../../../main/mimi.c`](../../../main/mimi.c)
+  [`../../../main/espagent.c`](../../../main/espagent.c)
 - Global compile-time config:
-  [`../../../main/mimi_config.h`](../../../main/mimi_config.h)
+  [`../../../main/espagent_config.h`](../../../main/espagent_config.h)
 - Build-time secrets template:
-  [`../../../main/mimi_secrets.h.example`](../../../main/mimi_secrets.h.example)
+  [`../../../main/espagent_secrets.h.example`](../../../main/espagent_secrets.h.example)
 - Agent loop and prompt assembly:
   [`../../../main/agent/agent_loop.c`](../../../main/agent/agent_loop.c)
   and
@@ -64,4 +64,4 @@ Place changes in the right module before editing code.
 3. Confirm the tool is registered and described well enough for the model to select it.
 4. Confirm end-to-end behavior from the actual chat channel.
 
-Read [`references/public-and-repo-notes.md`](references/public-and-repo-notes.md) when you need the public framing of MimiClaw plus a condensed repo map from the local architecture notes.
+Read [`references/public-and-repo-notes.md`](references/public-and-repo-notes.md) when you need the public framing of ESPAgent plus a condensed repo map from the local architecture notes.

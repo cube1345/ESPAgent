@@ -10,7 +10,7 @@ typedef struct {
     const char *description;
     const char *input_schema_json;  /* JSON Schema string for input */
     esp_err_t (*execute)(const char *input_json, char *output, size_t output_size);
-} mimi_tool_t;
+} espagent_tool_t;
 
 
 /**

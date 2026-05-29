@@ -1,5 +1,5 @@
 #include "feishu_bot.h"
-#include "mimi_config.h"
+#include "espagent_config.h"
 #include "bus/message_bus.h"
 #include "proxy/http_proxy.h"
 
@@ -27,8 +27,8 @@ static const char *TAG = "feishu";
 #define FEISHU_WS_CONFIG_URL    "https://open.feishu.cn/callback/ws/endpoint"
 
 /* ── Credentials & token state ─────────────────────────────── */
-static char s_app_id[64] = MIMI_SECRET_FEISHU_APP_ID;
-static char s_app_secret[128] = MIMI_SECRET_FEISHU_APP_SECRET;
+static char s_app_id[64] = ESPAGENT_SECRET_FEISHU_APP_ID;
+static char s_app_secret[128] = ESPAGENT_SECRET_FEISHU_APP_SECRET;
 static char s_tenant_token[512] = {0};
 static int64_t s_token_expire_time = 0;
 
@@ -616,7 +616,7 @@ static void feishu_ws_task(void *arg)
         esp_websocket_client_config_t ws_cfg = {
             .uri = s_ws_url,
             .buffer_size = 2048,
-            .task_stack = MIMI_FEISHU_POLL_STACK,
+            .task_stack = ESPAGENT_FEISHU_POLL_STACK,
             .reconnect_timeout_ms = s_ws_reconnect_interval_ms,
             .network_timeout_ms = 10000,
             .disable_auto_reconnect = false,
@@ -770,8 +770,8 @@ static void handle_message_event(cJSON *event)
     }
 
     /* Push to inbound message bus */
-    mimi_msg_t msg = {0};
-    strncpy(msg.channel, MIMI_CHAN_FEISHU, sizeof(msg.channel) - 1);
+    espagent_msg_t msg = {0};
+    strncpy(msg.channel, ESPAGENT_CHAN_FEISHU, sizeof(msg.channel) - 1);
     strncpy(msg.chat_id, route_id, sizeof(msg.chat_id) - 1);
     msg.content = strdup(cleaned);
 
@@ -792,16 +792,16 @@ static void handle_message_event(cJSON *event)
 esp_err_t feishu_bot_init(void)
 {
     nvs_handle_t nvs;
-    if (nvs_open(MIMI_NVS_FEISHU, NVS_READONLY, &nvs) == ESP_OK) {
+    if (nvs_open(ESPAGENT_NVS_FEISHU, NVS_READONLY, &nvs) == ESP_OK) {
         char tmp_id[64] = {0};
         char tmp_secret[128] = {0};
         size_t len_id = sizeof(tmp_id);
         size_t len_secret = sizeof(tmp_secret);
 
-        if (nvs_get_str(nvs, MIMI_NVS_KEY_FEISHU_APP_ID, tmp_id, &len_id) == ESP_OK && tmp_id[0]) {
+        if (nvs_get_str(nvs, ESPAGENT_NVS_KEY_FEISHU_APP_ID, tmp_id, &len_id) == ESP_OK && tmp_id[0]) {
             strncpy(s_app_id, tmp_id, sizeof(s_app_id) - 1);
         }
-        if (nvs_get_str(nvs, MIMI_NVS_KEY_FEISHU_APP_SECRET, tmp_secret, &len_secret) == ESP_OK && tmp_secret[0]) {
+        if (nvs_get_str(nvs, ESPAGENT_NVS_KEY_FEISHU_APP_SECRET, tmp_secret, &len_secret) == ESP_OK && tmp_secret[0]) {
             strncpy(s_app_secret, tmp_secret, sizeof(s_app_secret) - 1);
         }
         nvs_close(nvs);
@@ -829,11 +829,11 @@ esp_err_t feishu_bot_start(void)
     BaseType_t ok = xTaskCreatePinnedToCore(
         feishu_ws_task,
         "feishu_ws",
-        MIMI_FEISHU_POLL_STACK,
+        ESPAGENT_FEISHU_POLL_STACK,
         NULL,
-        MIMI_FEISHU_POLL_PRIO,
+        ESPAGENT_FEISHU_POLL_PRIO,
         &s_ws_task,
-        MIMI_FEISHU_POLL_CORE);
+        ESPAGENT_FEISHU_POLL_CORE);
     if (ok != pdPASS) {
         s_ws_task = NULL;
         return ESP_FAIL;
@@ -864,8 +864,8 @@ esp_err_t feishu_send_message(const char *chat_id, const char *text)
 
     while (offset < text_len) {
         size_t chunk = text_len - offset;
-        if (chunk > MIMI_FEISHU_MAX_MSG_LEN) {
-            chunk = MIMI_FEISHU_MAX_MSG_LEN;
+        if (chunk > ESPAGENT_FEISHU_MAX_MSG_LEN) {
+            chunk = ESPAGENT_FEISHU_MAX_MSG_LEN;
         }
 
         char *segment = malloc(chunk + 1);
@@ -973,9 +973,9 @@ esp_err_t feishu_reply_message(const char *message_id, const char *text)
 esp_err_t feishu_set_credentials(const char *app_id, const char *app_secret)
 {
     nvs_handle_t nvs;
-    ESP_ERROR_CHECK(nvs_open(MIMI_NVS_FEISHU, NVS_READWRITE, &nvs));
-    ESP_ERROR_CHECK(nvs_set_str(nvs, MIMI_NVS_KEY_FEISHU_APP_ID, app_id));
-    ESP_ERROR_CHECK(nvs_set_str(nvs, MIMI_NVS_KEY_FEISHU_APP_SECRET, app_secret));
+    ESP_ERROR_CHECK(nvs_open(ESPAGENT_NVS_FEISHU, NVS_READWRITE, &nvs));
+    ESP_ERROR_CHECK(nvs_set_str(nvs, ESPAGENT_NVS_KEY_FEISHU_APP_ID, app_id));
+    ESP_ERROR_CHECK(nvs_set_str(nvs, ESPAGENT_NVS_KEY_FEISHU_APP_SECRET, app_secret));
     ESP_ERROR_CHECK(nvs_commit(nvs));
     nvs_close(nvs);
 

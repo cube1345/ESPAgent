@@ -1,7 +1,7 @@
 #include "tools/tool_max98357.h"
 
 #include "drivers/max98357.h"
-#include "mimi_config.h"
+#include "espagent_config.h"
 
 #include <stdio.h>
 
@@ -38,11 +38,11 @@ esp_err_t tool_max98357_play_tone_execute(const char *input_json, char *output, 
     cfg.sample_rate_hz = (uint32_t)json_int_or_default(root, "sample_rate_hz", cfg.sample_rate_hz);
 
     uint32_t frequency_hz = (uint32_t)json_int_or_default(root, "frequency_hz",
-                                                          MIMI_MAX98357_DEFAULT_TONE_HZ);
+                                                          ESPAGENT_MAX98357_DEFAULT_TONE_HZ);
     uint32_t duration_ms = (uint32_t)json_int_or_default(root, "duration_ms",
-                                                         MIMI_MAX98357_DEFAULT_DURATION_MS);
+                                                         ESPAGENT_MAX98357_DEFAULT_DURATION_MS);
     uint8_t volume_pct = (uint8_t)json_int_or_default(root, "volume_pct",
-                                                      MIMI_MAX98357_DEFAULT_VOLUME_PCT);
+                                                      ESPAGENT_MAX98357_DEFAULT_VOLUME_PCT);
 
     esp_err_t err = max98357_play_tone(&cfg, frequency_hz, duration_ms, volume_pct,
                                        output, output_size);

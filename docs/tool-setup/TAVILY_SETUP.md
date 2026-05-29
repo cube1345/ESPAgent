@@ -4,14 +4,14 @@
   <img src="images/tavily-og.png" alt="Tavily - Search Engine for AI Agents" width="600" />
 </p>
 
-[Tavily](https://tavily.com) is a real-time search engine designed for AI agents and RAG workflows. MimiClaw uses Tavily as the **preferred** web search provider (with Brave Search as a fallback).
+[Tavily](https://tavily.com) is a real-time search engine designed for AI agents and RAG workflows. ESPAgent uses Tavily as the **preferred** web search provider (with Brave Search as a fallback).
 
 ## Table of Contents
 
 - [Overview](#overview)
 - [Getting an API Key](#getting-an-api-key)
-- [Configuring MimiClaw](#configuring-mimiclaw)
-- [How It Works in MimiClaw](#how-it-works-in-mimiclaw)
+- [Configuring ESPAgent](#configuring-ESPAgent)
+- [How It Works in ESPAgent](#how-it-works-in-ESPAgent)
 - [API Details](#api-details)
 - [Pricing](#pricing)
 - [Rate Limits](#rate-limits)
@@ -19,7 +19,7 @@
 
 ## Overview
 
-MimiClaw's `web_search` tool allows the AI agent to search the internet for real-time information. When a Tavily API key is configured, MimiClaw will use Tavily as the search provider. If no Tavily key is set but a Brave Search key exists, it falls back to Brave Search.
+ESPAgent's `web_search` tool allows the AI agent to search the internet for real-time information. When a Tavily API key is configured, ESPAgent will use Tavily as the search provider. If no Tavily key is set but a Brave Search key exists, it falls back to Brave Search.
 
 **Why Tavily?**
 
@@ -37,7 +37,7 @@ MimiClaw's `web_search` tool allows the AI agent to search the internet for real
 
 Your API key will look like: `tvly-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
 
-## Configuring MimiClaw
+## Configuring ESPAgent
 
 There are two ways to configure the Tavily API key:
 
@@ -46,13 +46,13 @@ There are two ways to configure the Tavily API key:
 1. Copy the secrets template if you haven't already:
 
 ```bash
-cp main/mimi_secrets.h.example main/mimi_secrets.h
+cp main/espagent_secrets.h.example main/espagent_secrets.h
 ```
 
-2. Edit `main/mimi_secrets.h` and set your Tavily key:
+2. Edit `main/espagent_secrets.h` and set your Tavily key:
 
 ```c
-#define MIMI_SECRET_TAVILY_KEY      "tvly-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+#define ESPAGENT_SECRET_TAVILY_KEY      "tvly-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
 
 3. Rebuild the firmware:
@@ -72,7 +72,7 @@ idf.py -p PORT flash monitor
 Connect to the UART (COM) port and run:
 
 ```
-mimi> set_tavily_key tvly-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ESPAgent> set_tavily_key tvly-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 This saves the key to NVS flash and takes effect immediately — no rebuild needed. Runtime values override build-time defaults.
@@ -82,18 +82,18 @@ This saves the key to NVS flash and takes effect immediately — no rebuild need
 Check that the key is set:
 
 ```
-mimi> config_show
+ESPAgent> config_show
 ```
 
 You should see `tavily_key: tvly-****` (masked) in the output.
 
-## How It Works in MimiClaw
+## How It Works in ESPAgent
 
-When the AI agent needs to search the web, it calls the `web_search` tool. MimiClaw selects the search provider with this priority:
+When the AI agent needs to search the web, it calls the `web_search` tool. ESPAgent selects the search provider with this priority:
 
 ```
-1. Tavily (if MIMI_SECRET_TAVILY_KEY is set)  <-- preferred
-2. Brave Search (if MIMI_SECRET_SEARCH_KEY is set)
+1. Tavily (if ESPAGENT_SECRET_TAVILY_KEY is set)  <-- preferred
+2. Brave Search (if ESPAGENT_SECRET_SEARCH_KEY is set)
 3. No search available (tool returns error)
 ```
 
@@ -106,7 +106,7 @@ User asks a question requiring web info
 Agent decides to call web_search tool
         |
         v
-MimiClaw sends POST to https://api.tavily.com/search
+ESPAgent sends POST to https://api.tavily.com/search
   - Authorization: Bearer tvly-xxxxx
   - Body: {"query": "...", "max_results": 5, "search_depth": "basic"}
         |
@@ -121,7 +121,7 @@ Each `basic` search costs **1 API credit**. With the free plan's 1,000 credits/m
 
 ## API Details
 
-MimiClaw uses the Tavily Search API endpoint:
+ESPAgent uses the Tavily Search API endpoint:
 
 | Parameter | Value |
 |-----------|-------|
@@ -129,7 +129,7 @@ MimiClaw uses the Tavily Search API endpoint:
 | **Auth** | `Authorization: Bearer <API_KEY>` |
 | **Content-Type** | `application/json` |
 
-### Request Body (as sent by MimiClaw)
+### Request Body (as sent by ESPAgent)
 
 | Field | Type | Value | Description |
 |-------|------|-------|-------------|
@@ -178,7 +178,7 @@ Tavily offers a generous free tier and several paid plans:
 - `basic` search depth: **1 credit**
 - `advanced` search depth: **2 credits**
 
-MimiClaw uses `basic` by default, so each search = 1 credit.
+ESPAgent uses `basic` by default, so each search = 1 credit.
 
 ## Rate Limits
 
@@ -195,7 +195,7 @@ For an ESP32-based agent, you will never hit these limits in practice.
 
 The agent returns this when neither Tavily nor Brave Search keys are set.
 
-**Fix:** Set a Tavily API key via `set_tavily_key` CLI command or in `mimi_secrets.h`.
+**Fix:** Set a Tavily API key via `set_tavily_key` CLI command or in `espagent_secrets.h`.
 
 ### Search returns empty results
 

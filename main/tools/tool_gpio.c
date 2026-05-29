@@ -1,7 +1,7 @@
 #include "tools/tool_gpio.h"
 
 #include "tools/gpio_policy.h"
-#include "mimi_config.h"
+#include "espagent_config.h"
 
 #include "driver/gpio.h"
 #include "driver/rmt_encoder.h"
@@ -88,11 +88,11 @@ static esp_err_t validate_allowed_gpio(int pin, char *output, size_t output_size
         if (gpio_policy_pin_forbidden_hint(pin, output, output_size)) {
             return ESP_ERR_INVALID_ARG;
         }
-        if (MIMI_GPIO_ALLOWED_CSV[0] != '\0') {
+        if (ESPAGENT_GPIO_ALLOWED_CSV[0] != '\0') {
             snprintf(output, output_size, "Error: pin %d is not in allowed list", pin);
         } else {
             snprintf(output, output_size, "Error: pin must be %d-%d",
-                     MIMI_GPIO_MIN_PIN, MIMI_GPIO_MAX_PIN);
+                     ESPAGENT_GPIO_MIN_PIN, ESPAGENT_GPIO_MAX_PIN);
         }
         return ESP_ERR_INVALID_ARG;
     }
@@ -329,7 +329,7 @@ static bool resolve_named_color(const char *color, int *r, int *g, int *b)
 
 esp_err_t tool_gpio_init(void)
 {
-    ESP_LOGI(TAG, "GPIO tools ready (default WS2812 GPIO=%d)", MIMI_WS2812_DEFAULT_GPIO);
+    ESP_LOGI(TAG, "GPIO tools ready (default WS2812 GPIO=%d)", ESPAGENT_WS2812_DEFAULT_GPIO);
     return ESP_OK;
 }
 
@@ -440,8 +440,8 @@ esp_err_t tool_gpio_read_all_execute(const char *input_json, char *output, size_
     remaining -= (size_t)written;
 
     int count = 0;
-    if (MIMI_GPIO_ALLOWED_CSV[0] != '\0') {
-        const char *csv_cursor = MIMI_GPIO_ALLOWED_CSV;
+    if (ESPAGENT_GPIO_ALLOWED_CSV[0] != '\0') {
+        const char *csv_cursor = ESPAGENT_GPIO_ALLOWED_CSV;
         while (*csv_cursor != '\0') {
             char *endptr = NULL;
             long value;
@@ -486,7 +486,7 @@ esp_err_t tool_gpio_read_all_execute(const char *input_json, char *output, size_
             csv_cursor = endptr;
         }
     } else {
-        for (int pin = MIMI_GPIO_MIN_PIN; pin <= MIMI_GPIO_MAX_PIN; pin++) {
+        for (int pin = ESPAGENT_GPIO_MIN_PIN; pin <= ESPAGENT_GPIO_MAX_PIN; pin++) {
             if (!gpio_policy_pin_is_allowed(pin)) {
                 continue;
             }
@@ -543,7 +543,7 @@ esp_err_t tool_ws2812_set_execute(const char *input_json, char *output, size_t o
         return ESP_ERR_INVALID_ARG;
     }
 
-    int pin = MIMI_WS2812_DEFAULT_GPIO;
+    int pin = ESPAGENT_WS2812_DEFAULT_GPIO;
     int brightness = 255;
     (void)get_optional_int(root, "pin", &pin);
     (void)get_optional_int(root, "brightness", &brightness);
@@ -561,7 +561,7 @@ esp_err_t tool_set_status_light_execute(const char *input_json, char *output, si
         return ESP_ERR_INVALID_ARG;
     }
 
-    int pin = MIMI_WS2812_DEFAULT_GPIO;
+    int pin = ESPAGENT_WS2812_DEFAULT_GPIO;
     int brightness = 255;
     int red = -1;
     int green = -1;

@@ -1,6 +1,6 @@
 #include "wifi_onboard.h"
 #include "onboard_html.h"
-#include "mimi_config.h"
+#include "espagent_config.h"
 #include "wifi/wifi_manager.h"
 
 #include <stdint.h>
@@ -175,7 +175,7 @@ static esp_err_t http_get_scan(httpd_req_t *req)
 
     uint16_t ap_count = 0;
     esp_wifi_scan_get_ap_num(&ap_count);
-    if (ap_count > MIMI_ONBOARD_MAX_SCAN) ap_count = MIMI_ONBOARD_MAX_SCAN;
+    if (ap_count > ESPAGENT_ONBOARD_MAX_SCAN) ap_count = ESPAGENT_ONBOARD_MAX_SCAN;
 
     wifi_ap_record_t *ap_list = calloc(ap_count, sizeof(wifi_ap_record_t));
     if (!ap_list) {
@@ -215,19 +215,18 @@ static esp_err_t http_get_config(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    json_add_effective_config(root, "ssid", MIMI_NVS_WIFI, MIMI_NVS_KEY_SSID, MIMI_SECRET_WIFI_SSID);
-    json_add_effective_config(root, "password", MIMI_NVS_WIFI, MIMI_NVS_KEY_PASS, MIMI_SECRET_WIFI_PASS);
-    json_add_effective_config(root, "api_key", MIMI_NVS_LLM, MIMI_NVS_KEY_API_KEY, MIMI_SECRET_API_KEY);
-    json_add_effective_config(root, "model", MIMI_NVS_LLM, MIMI_NVS_KEY_MODEL, MIMI_SECRET_MODEL);
-    json_add_effective_config(root, "provider", MIMI_NVS_LLM, MIMI_NVS_KEY_PROVIDER, MIMI_SECRET_MODEL_PROVIDER);
-    json_add_effective_config(root, "tg_token", MIMI_NVS_TG, MIMI_NVS_KEY_TG_TOKEN, MIMI_SECRET_TG_TOKEN);
-    json_add_effective_config(root, "feishu_app_id", MIMI_NVS_FEISHU, MIMI_NVS_KEY_FEISHU_APP_ID, MIMI_SECRET_FEISHU_APP_ID);
-    json_add_effective_config(root, "feishu_app_secret", MIMI_NVS_FEISHU, MIMI_NVS_KEY_FEISHU_APP_SECRET, MIMI_SECRET_FEISHU_APP_SECRET);
-    json_add_effective_config(root, "proxy_host", MIMI_NVS_PROXY, MIMI_NVS_KEY_PROXY_HOST, MIMI_SECRET_PROXY_HOST);
-    json_add_effective_config_u16(root, "proxy_port", MIMI_NVS_PROXY, MIMI_NVS_KEY_PROXY_PORT, MIMI_SECRET_PROXY_PORT);
-    json_add_effective_config(root, "proxy_type", MIMI_NVS_PROXY, MIMI_NVS_KEY_PROXY_TYPE, MIMI_SECRET_PROXY_TYPE);
-    json_add_effective_config(root, "search_key", MIMI_NVS_SEARCH, MIMI_NVS_KEY_API_KEY, MIMI_SECRET_SEARCH_KEY);
-    json_add_effective_config(root, "tavily_key", MIMI_NVS_SEARCH, MIMI_NVS_KEY_TAVILY_KEY, MIMI_SECRET_TAVILY_KEY);
+    json_add_effective_config(root, "ssid", ESPAGENT_NVS_WIFI, ESPAGENT_NVS_KEY_SSID, ESPAGENT_SECRET_WIFI_SSID);
+    json_add_effective_config(root, "password", ESPAGENT_NVS_WIFI, ESPAGENT_NVS_KEY_PASS, ESPAGENT_SECRET_WIFI_PASS);
+    json_add_effective_config(root, "api_key", ESPAGENT_NVS_LLM, ESPAGENT_NVS_KEY_API_KEY, ESPAGENT_SECRET_API_KEY);
+    json_add_effective_config(root, "model", ESPAGENT_NVS_LLM, ESPAGENT_NVS_KEY_MODEL, ESPAGENT_SECRET_MODEL);
+    json_add_effective_config(root, "provider", ESPAGENT_NVS_LLM, ESPAGENT_NVS_KEY_PROVIDER, ESPAGENT_SECRET_MODEL_PROVIDER);
+    json_add_effective_config(root, "feishu_app_id", ESPAGENT_NVS_FEISHU, ESPAGENT_NVS_KEY_FEISHU_APP_ID, ESPAGENT_SECRET_FEISHU_APP_ID);
+    json_add_effective_config(root, "feishu_app_secret", ESPAGENT_NVS_FEISHU, ESPAGENT_NVS_KEY_FEISHU_APP_SECRET, ESPAGENT_SECRET_FEISHU_APP_SECRET);
+    json_add_effective_config(root, "proxy_host", ESPAGENT_NVS_PROXY, ESPAGENT_NVS_KEY_PROXY_HOST, ESPAGENT_SECRET_PROXY_HOST);
+    json_add_effective_config_u16(root, "proxy_port", ESPAGENT_NVS_PROXY, ESPAGENT_NVS_KEY_PROXY_PORT, ESPAGENT_SECRET_PROXY_PORT);
+    json_add_effective_config(root, "proxy_type", ESPAGENT_NVS_PROXY, ESPAGENT_NVS_KEY_PROXY_TYPE, ESPAGENT_SECRET_PROXY_TYPE);
+    json_add_effective_config(root, "search_key", ESPAGENT_NVS_SEARCH, ESPAGENT_NVS_KEY_API_KEY, ESPAGENT_SECRET_SEARCH_KEY);
+    json_add_effective_config(root, "tavily_key", ESPAGENT_NVS_SEARCH, ESPAGENT_NVS_KEY_TAVILY_KEY, ESPAGENT_SECRET_TAVILY_KEY);
 
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -336,29 +335,26 @@ static esp_err_t http_post_save(httpd_req_t *req)
     }
 
     /* WiFi (required) */
-    nvs_sync_field(root, "ssid",     MIMI_NVS_WIFI,   MIMI_NVS_KEY_SSID);
-    nvs_sync_field(root, "password", MIMI_NVS_WIFI,   MIMI_NVS_KEY_PASS);
+    nvs_sync_field(root, "ssid",     ESPAGENT_NVS_WIFI,   ESPAGENT_NVS_KEY_SSID);
+    nvs_sync_field(root, "password", ESPAGENT_NVS_WIFI,   ESPAGENT_NVS_KEY_PASS);
 
     /* LLM */
-    nvs_sync_field(root, "api_key",  MIMI_NVS_LLM,    MIMI_NVS_KEY_API_KEY);
-    nvs_sync_field(root, "model",    MIMI_NVS_LLM,    MIMI_NVS_KEY_MODEL);
-    nvs_sync_field(root, "provider", MIMI_NVS_LLM,    MIMI_NVS_KEY_PROVIDER);
-
-    /* Telegram */
-    nvs_sync_field(root, "tg_token", MIMI_NVS_TG,     MIMI_NVS_KEY_TG_TOKEN);
+    nvs_sync_field(root, "api_key",  ESPAGENT_NVS_LLM,    ESPAGENT_NVS_KEY_API_KEY);
+    nvs_sync_field(root, "model",    ESPAGENT_NVS_LLM,    ESPAGENT_NVS_KEY_MODEL);
+    nvs_sync_field(root, "provider", ESPAGENT_NVS_LLM,    ESPAGENT_NVS_KEY_PROVIDER);
 
     /* Feishu */
-    nvs_sync_field(root, "feishu_app_id",     MIMI_NVS_FEISHU, MIMI_NVS_KEY_FEISHU_APP_ID);
-    nvs_sync_field(root, "feishu_app_secret", MIMI_NVS_FEISHU, MIMI_NVS_KEY_FEISHU_APP_SECRET);
+    nvs_sync_field(root, "feishu_app_id",     ESPAGENT_NVS_FEISHU, ESPAGENT_NVS_KEY_FEISHU_APP_ID);
+    nvs_sync_field(root, "feishu_app_secret", ESPAGENT_NVS_FEISHU, ESPAGENT_NVS_KEY_FEISHU_APP_SECRET);
 
     /* Proxy */
-    nvs_sync_field(root, "proxy_host", MIMI_NVS_PROXY, MIMI_NVS_KEY_PROXY_HOST);
-    nvs_sync_u16_field(root, "proxy_port", MIMI_NVS_PROXY, MIMI_NVS_KEY_PROXY_PORT);
-    nvs_sync_field(root, "proxy_type", MIMI_NVS_PROXY, MIMI_NVS_KEY_PROXY_TYPE);
+    nvs_sync_field(root, "proxy_host", ESPAGENT_NVS_PROXY, ESPAGENT_NVS_KEY_PROXY_HOST);
+    nvs_sync_u16_field(root, "proxy_port", ESPAGENT_NVS_PROXY, ESPAGENT_NVS_KEY_PROXY_PORT);
+    nvs_sync_field(root, "proxy_type", ESPAGENT_NVS_PROXY, ESPAGENT_NVS_KEY_PROXY_TYPE);
 
     /* Search */
-    nvs_sync_field(root, "search_key", MIMI_NVS_SEARCH, MIMI_NVS_KEY_API_KEY);
-    nvs_sync_field(root, "tavily_key", MIMI_NVS_SEARCH, MIMI_NVS_KEY_TAVILY_KEY);
+    nvs_sync_field(root, "search_key", ESPAGENT_NVS_SEARCH, ESPAGENT_NVS_KEY_API_KEY);
+    nvs_sync_field(root, "tavily_key", ESPAGENT_NVS_SEARCH, ESPAGENT_NVS_KEY_TAVILY_KEY);
 
     cJSON_Delete(root);
 
@@ -380,7 +376,7 @@ static esp_err_t start_softap(bool keep_sta)
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
     char ssid[32];
-    snprintf(ssid, sizeof(ssid), "%s%02X%02X", MIMI_ONBOARD_AP_PREFIX, mac[4], mac[5]);
+    snprintf(ssid, sizeof(ssid), "%s%02X%02X", ESPAGENT_ONBOARD_AP_PREFIX, mac[4], mac[5]);
 
     /* Create AP netif if not already present */
     static esp_netif_t *ap_netif = NULL;
@@ -422,7 +418,7 @@ static httpd_handle_t start_http_server(bool captive)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.server_port = MIMI_ONBOARD_HTTP_PORT;
+    config.server_port = ESPAGENT_ONBOARD_HTTP_PORT;
     config.max_uri_handlers = captive ? 16 : 8;
     config.stack_size = 8192;
     config.lru_purge_enable = true;
@@ -476,7 +472,7 @@ static httpd_handle_t start_http_server(bool captive)
     }
 
     s_captive_mode = captive;
-    ESP_LOGI(TAG, "HTTP server started on port %d", MIMI_ONBOARD_HTTP_PORT);
+    ESP_LOGI(TAG, "HTTP server started on port %d", ESPAGENT_ONBOARD_HTTP_PORT);
     return s_server;
 }
 
@@ -485,7 +481,7 @@ static httpd_handle_t start_http_server(bool captive)
 esp_err_t wifi_onboard_start(wifi_onboard_mode_t mode)
 {
     ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "  Starting WiFi Configuration Portal");
+    ESP_LOGI(TAG, "  ESPAgent local setup portal");
     ESP_LOGI(TAG, "========================================");
 
     bool captive = (mode == WIFI_ONBOARD_MODE_CAPTIVE);
@@ -502,14 +498,14 @@ esp_err_t wifi_onboard_start(wifi_onboard_mode_t mode)
     if (captive) {
         /* Start DNS hijack only for true captive portal mode. */
         xTaskCreate(dns_hijack_task, "dns_hijack",
-                    MIMI_ONBOARD_DNS_STACK, NULL, 5, NULL);
+                    ESPAGENT_ONBOARD_DNS_STACK, NULL, 5, NULL);
     }
 
     /* Start HTTP server */
     httpd_handle_t server = start_http_server(captive);
     if (!server) return ESP_FAIL;
 
-    ESP_LOGI(TAG, "Connect to MimiClaw-XXXX WiFi, then open http://192.168.4.1");
+    ESP_LOGI(TAG, "Connect to the ESPAgent-XXXX WiFi network, then open http://192.168.4.1");
 
     if (!captive) {
         ESP_LOGI(TAG, "Local admin portal stays available while STA is connected");

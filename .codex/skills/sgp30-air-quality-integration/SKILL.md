@@ -1,6 +1,6 @@
 ---
 name: sgp30-air-quality-integration
-description: Integrate the Sensirion SGP30 with ESP32 and MimiClaw. Use when implementing or debugging SGP30 I2C reads, CRC checking, warm-up handling, baseline persistence, humidity compensation, or when exposing SGP30 readings as a chat-callable air-quality tool.
+description: Integrate the Sensirion SGP30 with ESP32 and ESPAgent. Use when implementing or debugging SGP30 I2C reads, CRC checking, warm-up handling, baseline persistence, humidity compensation, or when exposing SGP30 readings as a chat-callable air-quality tool.
 ---
 
 # Sgp30 Air Quality Integration
@@ -37,7 +37,7 @@ Treat the SGP30 as a small, specific IAQ sensor with strict transaction rules.
 - Prompt guidance that biases the model toward the alias:
   [`../../../main/agent/context_builder.c`](../../../main/agent/context_builder.c)
 - Default pin and bus config template:
-  [`../../../main/mimi_secrets.h.example`](../../../main/mimi_secrets.h.example)
+  [`../../../main/espagent_secrets.h.example`](../../../main/espagent_secrets.h.example)
 
 ## Good Tool Shape
 

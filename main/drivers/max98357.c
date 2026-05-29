@@ -1,6 +1,6 @@
 #include "drivers/max98357.h"
 
-#include "mimi_config.h"
+#include "espagent_config.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -26,12 +26,12 @@ void max98357_default_config(max98357_config_t *cfg)
         return;
     }
 
-    cfg->i2s_port = MIMI_MAX98357_DEFAULT_I2S_PORT;
-    cfg->bclk_gpio = (gpio_num_t)MIMI_MAX98357_DEFAULT_BCLK_GPIO;
-    cfg->ws_gpio = (gpio_num_t)MIMI_MAX98357_DEFAULT_WS_GPIO;
-    cfg->din_gpio = (gpio_num_t)MIMI_MAX98357_DEFAULT_DIN_GPIO;
-    cfg->sd_gpio = (gpio_num_t)MIMI_MAX98357_DEFAULT_SD_GPIO;
-    cfg->sample_rate_hz = MIMI_MAX98357_DEFAULT_SAMPLE_RATE_HZ;
+    cfg->i2s_port = ESPAGENT_MAX98357_DEFAULT_I2S_PORT;
+    cfg->bclk_gpio = (gpio_num_t)ESPAGENT_MAX98357_DEFAULT_BCLK_GPIO;
+    cfg->ws_gpio = (gpio_num_t)ESPAGENT_MAX98357_DEFAULT_WS_GPIO;
+    cfg->din_gpio = (gpio_num_t)ESPAGENT_MAX98357_DEFAULT_DIN_GPIO;
+    cfg->sd_gpio = (gpio_num_t)ESPAGENT_MAX98357_DEFAULT_SD_GPIO;
+    cfg->sample_rate_hz = ESPAGENT_MAX98357_DEFAULT_SAMPLE_RATE_HZ;
 }
 
 static bool valid_output_gpio(gpio_num_t gpio)
@@ -179,10 +179,10 @@ esp_err_t max98357_play_tone(const max98357_config_t *cfg,
     }
 
     if (frequency_hz == 0) {
-        frequency_hz = MIMI_MAX98357_DEFAULT_TONE_HZ;
+        frequency_hz = ESPAGENT_MAX98357_DEFAULT_TONE_HZ;
     }
     if (duration_ms == 0) {
-        duration_ms = MIMI_MAX98357_DEFAULT_DURATION_MS;
+        duration_ms = ESPAGENT_MAX98357_DEFAULT_DURATION_MS;
     }
     if (duration_ms > MAX98357_MAX_DURATION_MS) {
         duration_ms = MAX98357_MAX_DURATION_MS;

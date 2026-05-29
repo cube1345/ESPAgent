@@ -1,6 +1,6 @@
 ---
 name: hc-sr05-presence-integration
-description: Integrate or debug HC-SR05 ultrasonic modules on ESP32 or MimiClaw, especially when using distance thresholds for human presence, obstacle proximity, or chat-callable presence sensing. Use when wiring Trig and Echo pins, protecting ESP32 inputs from 5V Echo, timing ultrasonic pulses, filtering false detections, or clarifying confusion with HC-SR501 and HC-SR505 PIR human body sensors.
+description: Integrate or debug HC-SR05 ultrasonic modules on ESP32 or ESPAgent, especially when using distance thresholds for human presence, obstacle proximity, or chat-callable presence sensing. Use when wiring Trig and Echo pins, protecting ESP32 inputs from 5V Echo, timing ultrasonic pulses, filtering false detections, or clarifying confusion with HC-SR501 and HC-SR505 PIR human body sensors.
 ---
 
 # Hc Sr05 Presence Integration
@@ -51,15 +51,15 @@ This makes the behavior usable for a nearby hand, person, or obstacle while bein
 - Use GPIO output for `Trig` and GPIO input for `Echo`.
 - Prefer `esp_timer_get_time()` for microsecond timestamps in a simple blocking measurement.
 - Keep each read bounded by timeout loops; return `timeout` or `out_of_range` explicitly.
-- If high-rate or low-jitter measurement becomes important, consider RMT or interrupt capture, but do not start there for MimiClaw agent tools.
+- If high-rate or low-jitter measurement becomes important, consider RMT or interrupt capture, but do not start there for ESPAgent agent tools.
 - Keep the hardware-facing code separate from the chat-facing tool wrapper.
 
-## MimiClaw Touch Points
+## ESPAgent Touch Points
 
 For this repo, follow the existing hardware tool pattern:
 
 - defaults and pin configuration:
-  [`../../../main/mimi_config.h`](../../../main/mimi_config.h)
+  [`../../../main/espagent_config.h`](../../../main/espagent_config.h)
 - tool registration and schema:
   [`../../../main/tools/tool_registry.c`](../../../main/tools/tool_registry.c)
 - direct hardware implementation:

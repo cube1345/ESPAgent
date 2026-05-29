@@ -1,6 +1,6 @@
 #include "cache/cache_store.h"
 
-#include "mimi_config.h"
+#include "espagent_config.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -15,9 +15,10 @@
 
 static const char *TAG = "cache";
 
+// 一个简单的内存键值缓存，支持过期和LRU淘汰。所有数据存储在RAM中，适合频繁访问的小数据，如LLM上下文片段、工具调用结果等。设计目标是快速读写和简单的过期机制，不适合大规模或持久化存储。
 typedef struct {
     bool used;
-    char key[MIMI_CACHE_MAX_KEY_BYTES];
+    char key[ESPAGENT_CACHE_MAX_KEY_BYTES];
     char *value;
     size_t value_len;
     int64_t expires_at_us;
@@ -25,7 +26,8 @@ typedef struct {
     uint32_t hits;
 } cache_entry_t;
 
-static cache_entry_t s_entries[MIMI_CACHE_MAX_ENTRIES];
+// 全局静态数组
+static cache_entry_t s_entries[ESPAGENT_CACHE_MAX_ENTRIES];
 static SemaphoreHandle_t s_lock;
 static uint32_t s_hits;
 static uint32_t s_misses;
@@ -66,7 +68,7 @@ static char *alloc_value(size_t len)
 
 static int find_entry(const char *key)
 {
-    for (int i = 0; i < MIMI_CACHE_MAX_ENTRIES; ++i) {
+    for (int i = 0; i < ESPAGENT_CACHE_MAX_ENTRIES; ++i) {
         if (s_entries[i].used && strcmp(s_entries[i].key, key) == 0) {
             return i;
         }
@@ -76,7 +78,7 @@ static int find_entry(const char *key)
 
 static int find_free_entry(void)
 {
-    for (int i = 0; i < MIMI_CACHE_MAX_ENTRIES; ++i) {
+    for (int i = 0; i < ESPAGENT_CACHE_MAX_ENTRIES; ++i) {
         if (!s_entries[i].used) {
             return i;
         }
@@ -89,7 +91,7 @@ static int find_victim(int64_t now)
     int victim = -1;
     int64_t oldest_access = INT64_MAX;
 
-    for (int i = 0; i < MIMI_CACHE_MAX_ENTRIES; ++i) {
+    for (int i = 0; i < ESPAGENT_CACHE_MAX_ENTRIES; ++i) {
         if (!s_entries[i].used) {
             return i;
         }
@@ -111,7 +113,7 @@ static int find_used_victim(int64_t now)
     int victim = -1;
     int64_t oldest_access = INT64_MAX;
 
-    for (int i = 0; i < MIMI_CACHE_MAX_ENTRIES; ++i) {
+    for (int i = 0; i < ESPAGENT_CACHE_MAX_ENTRIES; ++i) {
         if (!s_entries[i].used) {
             continue;
         }
@@ -130,7 +132,7 @@ static int find_used_victim(int64_t now)
 
 static void evict_until_fits(size_t incoming_len, int protected_idx, int64_t now)
 {
-    while (s_total_bytes + incoming_len > MIMI_CACHE_MAX_TOTAL_BYTES) {
+    while (s_total_bytes + incoming_len > ESPAGENT_CACHE_MAX_TOTAL_BYTES) {
         int victim = find_used_victim(now);
         if (victim < 0 || victim == protected_idx) {
             break;
@@ -143,6 +145,7 @@ static void evict_until_fits(size_t incoming_len, int protected_idx, int64_t now
 esp_err_t cache_store_init(void)
 {
     if (!s_lock) {
+        // 使用FreeRTOS的互斥锁保护访问，确保线程安全
         s_lock = xSemaphoreCreateMutex();
         if (!s_lock) {
             return ESP_ERR_NO_MEM;
@@ -150,9 +153,9 @@ esp_err_t cache_store_init(void)
     }
 
     ESP_LOGI(TAG, "RAM KV cache ready: entries=%d total=%d value=%d",
-             MIMI_CACHE_MAX_ENTRIES,
-             MIMI_CACHE_MAX_TOTAL_BYTES,
-             MIMI_CACHE_MAX_VALUE_BYTES);
+             ESPAGENT_CACHE_MAX_ENTRIES,
+             ESPAGENT_CACHE_MAX_TOTAL_BYTES,
+             ESPAGENT_CACHE_MAX_VALUE_BYTES);
     return ESP_OK;
 }
 
@@ -204,7 +207,7 @@ esp_err_t cache_put(const char *key, const char *value, uint32_t ttl_s)
 
     size_t key_len = strlen(key);
     size_t value_len = strlen(value);
-    if (key_len >= MIMI_CACHE_MAX_KEY_BYTES || value_len > MIMI_CACHE_MAX_VALUE_BYTES) {
+    if (key_len >= ESPAGENT_CACHE_MAX_KEY_BYTES || value_len > ESPAGENT_CACHE_MAX_VALUE_BYTES) {
         return ESP_ERR_INVALID_SIZE;
     }
 
@@ -215,7 +218,7 @@ esp_err_t cache_put(const char *key, const char *value, uint32_t ttl_s)
     memcpy(copy, value, value_len + 1);
 
     int64_t now = now_us();
-    int64_t expires_at = now + ((int64_t)(ttl_s ? ttl_s : MIMI_CACHE_DEFAULT_TTL_S) * 1000000LL);
+    int64_t expires_at = now + ((int64_t)(ttl_s ? ttl_s : ESPAGENT_CACHE_DEFAULT_TTL_S) * 1000000LL);
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     int idx = find_entry(key);
@@ -235,7 +238,7 @@ esp_err_t cache_put(const char *key, const char *value, uint32_t ttl_s)
         }
     }
 
-    if (idx < 0 || s_total_bytes + value_len > MIMI_CACHE_MAX_TOTAL_BYTES) {
+    if (idx < 0 || s_total_bytes + value_len > ESPAGENT_CACHE_MAX_TOTAL_BYTES) {
         xSemaphoreGive(s_lock);
         free(copy);
         return ESP_ERR_NO_MEM;
@@ -281,7 +284,7 @@ esp_err_t cache_delete_prefix(const char *prefix)
 
     size_t prefix_len = strlen(prefix);
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    for (int i = 0; i < MIMI_CACHE_MAX_ENTRIES; ++i) {
+    for (int i = 0; i < ESPAGENT_CACHE_MAX_ENTRIES; ++i) {
         if (s_entries[i].used && strncmp(s_entries[i].key, prefix, prefix_len) == 0) {
             free_entry(&s_entries[i]);
         }
@@ -308,7 +311,7 @@ void cache_stats(cache_stats_t *stats)
     stats->expired = s_expired;
     stats->truncated = s_truncated;
     stats->bytes = (uint32_t)s_total_bytes;
-    for (int i = 0; i < MIMI_CACHE_MAX_ENTRIES; ++i) {
+    for (int i = 0; i < ESPAGENT_CACHE_MAX_ENTRIES; ++i) {
         if (s_entries[i].used) {
             stats->entries++;
         }
@@ -331,7 +334,7 @@ size_t cache_dump(char *out, size_t out_size)
     int64_t now = now_us();
     xSemaphoreTake(s_lock, portMAX_DELAY);
 
-    for (int i = 0; i < MIMI_CACHE_MAX_ENTRIES && off < out_size - 1; ++i) {
+    for (int i = 0; i < ESPAGENT_CACHE_MAX_ENTRIES && off < out_size - 1; ++i) {
         cache_entry_t *entry = &s_entries[i];
         if (!entry->used) {
             continue;
@@ -383,7 +386,7 @@ void cache_clear(void)
     }
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    for (int i = 0; i < MIMI_CACHE_MAX_ENTRIES; ++i) {
+    for (int i = 0; i < ESPAGENT_CACHE_MAX_ENTRIES; ++i) {
         free_entry(&s_entries[i]);
     }
     s_total_bytes = 0;

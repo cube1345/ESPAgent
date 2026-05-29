@@ -86,14 +86,14 @@ static bool pin_is_allowed_impl(int pin,
 bool gpio_policy_pin_is_allowed(int pin)
 {
 #if defined(CONFIG_IDF_TARGET_ESP32)
-    return pin_is_allowed_impl(pin, MIMI_GPIO_ALLOWED_CSV,
-                               MIMI_GPIO_MIN_PIN, MIMI_GPIO_MAX_PIN, true, false);
+    return pin_is_allowed_impl(pin, ESPAGENT_GPIO_ALLOWED_CSV,
+                               ESPAGENT_GPIO_MIN_PIN, ESPAGENT_GPIO_MAX_PIN, true, false);
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
-    return pin_is_allowed_impl(pin, MIMI_GPIO_ALLOWED_CSV,
-                               MIMI_GPIO_MIN_PIN, MIMI_GPIO_MAX_PIN, false, true);
+    return pin_is_allowed_impl(pin, ESPAGENT_GPIO_ALLOWED_CSV,
+                               ESPAGENT_GPIO_MIN_PIN, ESPAGENT_GPIO_MAX_PIN, false, true);
 #else
-    return pin_is_allowed_impl(pin, MIMI_GPIO_ALLOWED_CSV,
-                               MIMI_GPIO_MIN_PIN, MIMI_GPIO_MAX_PIN, false, false);
+    return pin_is_allowed_impl(pin, ESPAGENT_GPIO_ALLOWED_CSV,
+                               ESPAGENT_GPIO_MIN_PIN, ESPAGENT_GPIO_MAX_PIN, false, false);
 #endif
 }
 

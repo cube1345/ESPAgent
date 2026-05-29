@@ -1,6 +1,6 @@
 #include "tools/tool_dht11.h"
 
-#include "mimi_config.h"
+#include "espagent_config.h"
 
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -107,7 +107,7 @@ static esp_err_t dht11_read_raw(int pin, uint8_t data[5])
 
 esp_err_t tool_read_temperature_humidity_execute(const char *input_json, char *output, size_t output_size)
 {
-    const int pin = MIMI_DHT11_DEFAULT_GPIO;
+    const int pin = ESPAGENT_DHT11_DEFAULT_GPIO;
 
     if (input_json && input_json[0] != '\0') {
         cJSON *root = cJSON_Parse(input_json);

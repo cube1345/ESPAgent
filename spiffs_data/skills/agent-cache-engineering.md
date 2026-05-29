@@ -1,6 +1,6 @@
 # Agent Cache Engineering
 
-Design cache-friendly agent behavior for MimiClaw.
+Design cache-friendly agent behavior for ESPAgent.
 
 ## When to use
 Use this skill when the user asks about cache, prompt caching, context caching, KV cache, lower latency, lower token cost, or keeping repeated agent context stable.
@@ -14,7 +14,7 @@ Use this skill when the user asks about cache, prompt caching, context caching, 
 - Keep model/provider stable during a session when cache reuse matters.
 - Treat API prompt caching as provider-managed. The ESP32 cannot directly access the model's internal attention KV tensors.
 
-## MimiClaw guidance
+## ESPAgent guidance
 1. Keep `tool_registry_get_tools_json()` deterministic.
 2. Keep `context_build_system_prompt()` stable where possible.
 3. Move frequently changing data out of the static prompt:
@@ -50,7 +50,7 @@ Current project status:
 - Tool result cache: short-lived cache for web/MCP/sensor results.
 - Durable KV cache: SPIFFS/NVS backed metadata and small values.
 
-## Prompt cache break detection for MimiClaw
+## Prompt cache break detection for ESPAgent
 Track one small prompt-cache state record per active chat/source:
 - `system_hash`: hash of stable system prompt text.
 - `tools_hash`: hash of tools JSON.
@@ -75,7 +75,7 @@ If provider cache metrics are unavailable, still log local prompt-state changes:
 
 This gives enough observability to tune stable-prefix behavior on ESP32.
 
-## MimiClaw prompt layout recommendation
+## ESPAgent prompt layout recommendation
 Use this ordering:
 1. Static identity and behavior.
 2. Built-in tool descriptions.
@@ -90,7 +90,7 @@ Do not put current time, IP address, heap status, WiFi RSSI, sensor readings, or
 
 ## Do not confuse these
 - Transformer KV cache stores attention key/value tensors inside the model runtime.
-- MimiClaw's ESP32 KV cache should store application data: strings, JSON, tool results, hashes, and timestamps.
+- ESPAgent's ESP32 KV cache should store application data: strings, JSON, tool results, hashes, and timestamps.
 - If the model runs in the cloud, true tensor KV cache lives with the provider, not on the ESP32.
 
 ## Good response pattern

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in MimiClaw. This project welcomes focused, high-quality contributions that improve reliability, performance, or documentation.
+Thanks for your interest in ESPAgent. This project welcomes focused, high-quality contributions that improve reliability, performance, or documentation.
 
 ## Scope
 
@@ -24,7 +24,7 @@ We accept contributions in these areas:
 
 - Install ESP-IDF v5.5+.
 - Build targets are in `idf.py`.
-- Default config lives in `main/mimi_secrets.h.example`.
+- Default config lives in `main/espagent_secrets.h.example`.
 
 ## Branching and Commits
 
