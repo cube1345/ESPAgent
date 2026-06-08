@@ -106,6 +106,7 @@ For a four-ESP32 setup, use the same firmware and assign each board a different 
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Public knowledge base](docs/PUBLIC_KNOWLEDGE_BASE.md)
 - [LingShu Agent Mesh](docs/LINGSHU_AGENT_MESH.md)
 - [ESP32 role profiles](docs/ESP32_ROLE_PROFILES.md)
 - [Feishu setup](docs/im-integration/FEISHU_SETUP.md)

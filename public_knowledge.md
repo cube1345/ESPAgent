@@ -4,6 +4,8 @@ Last updated: 2026-06-09
 
 This file is the required shared handoff document for any AI working in this repository.
 
+For a full project-level knowledge base, read `docs/PUBLIC_KNOWLEDGE_BASE.md`. That document summarizes the architecture, file responsibilities, implemented features, detailed boundaries, current progress, known limitations, and future roadmap.
+
 ## Mandatory AI Workflow
 
 If you are an AI agent operating in this repo, treat the following as required repo policy:
@@ -34,6 +36,9 @@ Build and maintain a practical ESP32-S3 based ESPAgent firmware that can:
 ## Project Identity / Documentation Baseline
 
 - ESPAgent is documented and presented as its own ESP32-S3 firmware project.
+- Public GitHub repository:
+  - HTTPS: `https://github.com/cube1345/ESPAgent.git`
+  - SSH: `git@github.com:cube1345/ESPAgent.git`
 - Root `README.md` now defines the project scope, build flow, and repository layout under the ESPAgent name.
 - `docs/ARCHITECTURE.md` uses the current ESPAgent module layout (`main/channels/feishu`, `main/onboard`, `main/espnow`, `main/sensors`, etc.) and no longer contains external-origin mapping tables.
 - `docs/TODO.md` is an ESPAgent roadmap rather than an external comparison tracker.
@@ -270,6 +275,23 @@ Guidance:
 - Verified with explicit ESP-IDF Python environment:
   - `ESP_IDF_VERSION=6.1.0 IDF_PATH=/home/cube/WorkSpace/ESP/esp-idf IDF_PYTHON_ENV_PATH=/home/cube/.espressif/python_env/idf6.1_py3.13_env PATH=/home/cube/.espressif/python_env/idf6.1_py3.13_env/bin:/home/cube/WorkSpace/ESP/esp-idf/tools:$PATH /home/cube/.espressif/python_env/idf6.1_py3.13_env/bin/python /home/cube/WorkSpace/ESP/esp-idf/tools/idf.py build`
   - `build/ESPAgent.bin` generated successfully with size `0x147e40`, leaving `0xb81c0` bytes free in the smallest app partition.
+- Added `docs/PUBLIC_KNOWLEDGE_BASE.md` as the comprehensive public knowledge base for the project:
+  - project positioning and current single-agent boundary
+  - LingShu Agent Mesh state and four-ESP32 role profiles
+  - full directory and file responsibility map
+  - implemented features and hardware/tool details
+  - storage, runtime tasks, current progress, known limitations, and roadmap
+- Linked the public knowledge base from `README.md`.
+- Updated the public knowledge base with the four-ESP32 resource-usage and code-design plan:
+  - recommended architecture: `common runtime + mesh protocol + role-specific service`
+  - future module split: `main/mesh`, `main/roles`, `main/sensors`, `main/control`, `main/display`
+  - per-node resource focus for coordinator/sensor/control/display boards
+  - safe remote-control path: MQTT command -> protocol validation -> command queue -> safety interlock -> actuator state -> driver/tool -> result/timeline event
+  - explicit rule that MQTT callbacks must not directly call hardware tools such as `gpio_write`, `servo_write`, or `ws2812_set`
+- Updated `docs/ESP32_ROLE_PROFILES.md` with the same resource-use design, safe command path, command struct proposal, and phased module split roadmap.
+- Recorded the public GitHub repository URL:
+  - `https://github.com/cube1345/ESPAgent.git`
+  - SSH push URL remains `git@github.com:cube1345/ESPAgent.git`
 
 ### 2026-05-31
 
