@@ -88,6 +88,29 @@ esp32s3-control-01      control_agent      control,gpio,rgb,servo,relay,actuator
 esp32s3-display-01      display_agent      display,timeline,alerts,state,watchdog
 ```
 
+当前实物映射：
+
+```text
+/dev/ttyUSB0  esp32s3-coordinator-01  coordinator_agent
+/dev/ttyUSB1  esp32s3-sensor-01       sensor_agent
+/dev/ttyUSB2  esp32s3-control-01      control_agent
+/dev/ttyUSB3  esp32s3-display-01      display_agent
+```
+
+当前 MQTT 联调状态：
+
+- USB0 `coordinator_agent` 已烧录，串口确认 Coordinator role 启动，并且 Feishu P2P bot `咕咕嘎嘎！` 已完成端到端回复验证。
+- USB1 `sensor_agent` 已烧录，串口确认 Sensor role 启动，presence/environment monitor 已启动，并周期发布 `state online`。
+- USB2 `control_agent` 已烧录，串口确认 Control role 周期发布 `state online`。
+- USB3 `display_agent` 已烧录，串口确认 Display role 周期发布 `state online`。
+- 2026-06-15 联调确认：四个串口 `/dev/ttyUSB0-3` 均可读取，但当前工具环境读串口需要提权；非提权 `/dev` 扫描可能短暂看不到设备。
+- Coordinator 通过飞书自然语言测试已经能把 `读取温湿度` 路由到 `sensor_agent`，把 `点亮WS2812为蓝色` 路由到 `control_agent`。
+- Sensor 节点当前日志中可见 `DHT22=ESP_ERR_TIMEOUT` 和 `MH-Z19=ESP_FAIL`，表示节点在线但这些具体传感器在当前接线/配置下未读到数据。
+- 当前控制类远程执行仍需补齐 command queue、safety interlock、actuator state 和 result/timeline 审计后再完全开放；sensor 只有 `read_temperature_humidity` 白名单例外。
+- 联调用 broker 暂为 `broker.emqx.io:1883`，topic prefix 暂为 `espagent/cube1345`；这是调试配置，不是生产配置。
+- `mesh_send_command` 已加入 LLM tool registry，Coordinator 可以把跨节点请求发布为 MQTT Mesh command。
+- Sensor 角色已补充 `read_temperature_humidity` command 白名单：收到命令后可调用 AHT10/AHT20 工具并发布 `mesh_command_result` 到 events/timeline。
+
 MQTT Mesh topic：
 
 ```text
@@ -101,7 +124,218 @@ espagent/agent/timeline
 espagent/alerts
 ```
 
-当前 MQTT command / dispatch 仍然只记录日志，不直接执行硬件动作。真正执行前必须补 command schema、鉴权、审计、message_bus 转发和 tool_guard。
+当前 MQTT command / dispatch 的执行边界是：Sensor 角色只对白名单 `read_temperature_humidity` 做受限执行并发布 `mesh_command_result`；其它 node/role command 仍以校验和 dry-run 日志为主，不直接执行硬件动作。Control 角色真正执行前必须补 command queue、鉴权、审计、message_bus/tool_guard 转发和 safety interlock。
+
+Feishu/LLM 通信板的 MQTT 桥接已经进入可编译状态：
+
+- Feishu 入站消息会发布到本节点 `events`、全局 `agent/dispatch` 和全局 `agent/timeline`。
+- AI 通过 Feishu 发出的出站回复会发布到本节点 `events` 和全局 `agent/timeline`。
+- MQTT 发布走 FreeRTOS queue，允许 Feishu 事件先入队，等 MQTT 连接成功后再 flush。
+- MQTT 接收端已支持标准 remaining length 解析，避免 payload 超过 127 字节时误读包体。
+- 这些事件当前用于审计、展示和后续调度输入；还不会直接驱动其他 ESP32 的硬件动作。
+
+Feishu WebSocket 稳定性状态：
+
+- 2026-06-15 复现过一次 `feishu_ack` 任务栈溢出：飞书 WebSocket 收到消息后，ACK 小任务因 4KB 栈不足重启 Coordinator。
+- 已新增 `ESPAGENT_FEISHU_ACK_STACK`，当前配置为 8KB，并把 `feishu_ack` 任务改为使用该配置。
+- 修复后重新烧录 USB0，飞书消息 `测试第一角色修复后是否恢复：请回复收到。` 已正常得到 `ESPAgent is processing your request...` 和 `收到。` 两条回复。
+
+## 四角色公共认知
+
+四个角色不是四个彼此孤立的聊天机器人，而是同一套 ESPAgent runtime 在不同 ESP32-S3 上按职责裁剪后的节点。当前工程推荐继续保持“同仓库、同固件、不同 build-time profile”的方式，先靠 `ESPAGENT_NODE_ROLE` 和 `ESPAGENT_NODE_CAPABILITIES` 控制启动服务，后续再拆出更细的 role service。
+
+### Coordinator / Communication Agent
+
+地位：
+
+- 这是当前接入 Feishu 的主 MCU，也是用户入口和 LLM 入口。
+- 在四节点系统中处于“任务理解与调度核心”位置，但不应该直接承担全部传感器采样和高风险执行器控制。
+- 当前本地私有配置已按该角色设置为 `esp32s3-coordinator-01` / `coordinator_agent` / `coordinator,communication,llm,dispatch,timeline,alerts`。
+
+当前职责：
+
+- 接入 Feishu WebSocket 和 WebSocket chat gateway。
+- 运行 `agent_loop`，调用 LLM provider，管理 session/context/skills。
+- 调用工具：天气、搜索、时间、cron/proactive、文件、部分硬件工具。
+- 发布 MQTT state/events，并把 Feishu 入站发布到 `espagent/agent/dispatch` 和 `espagent/agent/timeline`。
+- 通过 Feishu 把最终回复发回用户。
+
+输入：
+
+- Feishu 用户消息。
+- WebSocket 用户消息。
+- Cron/proactive 注入消息。
+- 未来来自 MQTT 的 sensor telemetry、node state、alerts、tool result。
+
+输出：
+
+- Feishu/WebSocket 回复。
+- `espagent/nodes/<coordinator_id>/events`
+- `espagent/agent/dispatch`
+- `espagent/agent/timeline`
+- 未来面向 sensor/control/display 的正式 Mesh command。
+
+已完成进度：
+
+- Feishu/LLM 主链路已跑通。
+- `feishu_inbound` 和 `feishu_outbound` MQTT 事件桥接已完成并通过构建。
+- USB0 作为 Coordinator 已验证 MQTT state/events 发布到公网测试 broker。
+- Coordinator 已新增 `mesh_send_command` 工具，可向 `sensor_agent`、`control_agent` 或指定 node 发布标准 MQTT Mesh command。
+- UTF-8 safe prompt truncation 已修复，避免 LLM API 因截断中文而返回 HTTP 400。
+- 启动后 SNTP 校时已接入，默认 `ntp.aliyun.com`，`get_current_time` 会优先使用已同步系统时间。
+- 高德 `get_weather` 工具已注册，默认南京市栖霞区。
+
+当前限制：
+
+- 还没有把自然语言任务自动转换成正式 Mesh command。
+- 还没有等待远端 `mesh_command_result`、关联 `command_id` 并把结果主动汇总回复飞书。
+- 还没有完整 tool_use/tool_result timeline。
+- 还没有 role-based tool exposure，Coordinator 仍能看到较多本地工具。
+- MQTT broker 不可达时，事件只能在本地队列中等待，无法被其他节点看到。
+- SNTP/天气修复已通过构建，但还没有在真实 Feishu 消息上完成板端运行验证。
+
+下一步：
+
+- 将 LLM 产出的跨节点动作转为 `espagent_mesh_command_t`。
+- 对 dispatch 结果增加 command_id、target_role、safety_level、ttl_ms。
+- 把天气、时间、主动提醒结果同步到 timeline，供 Display Agent 展示。
+
+### Sensor Agent
+
+地位：
+
+- Sensor 是多节点系统的感知层，负责把真实环境变成可靠、短小、带时间戳的数据。
+- 它不跑主 LLM，也不直接执行高风险控制动作。
+- 它的价值在于长时间稳定采样、滤波、缓存和上报。
+
+当前职责：
+
+- 读取 AHT10/AHT20 温湿度、SGP30 eCO2/TVOC、BH1750/GY-30 光照、人体存在/距离等环境数据。
+- 周期发布 telemetry。
+- 通过 MQTT/ESP-NOW 把传感器快照给 Coordinator 和 Display。
+- 后续做阈值判断，例如湿度过低、空气质量变差、光照异常。
+
+输入：
+
+- 本地 I2C/UART/GPIO 传感器。
+- 未来的 MQTT read/query command。
+
+输出：
+
+- `espagent/nodes/<sensor_id>/telemetry`
+- `espagent/nodes/<sensor_id>/state`
+- `espagent/nodes/<sensor_id>/events`
+- ESP-NOW 环境数据包。
+
+已完成进度：
+
+- role/capability 已能让 sensor profile 启动本地 sensor monitor。
+- 环境监测任务已存在，能读取综合环境数据并通过 ESP-NOW 发送。
+- MQTT telemetry/state/event 框架已存在。
+- MQTT 收到 `read_temperature_humidity` command 时，Sensor 角色可执行 AHT10/AHT20 温湿度读取，并发布 `mesh_command_result`。
+
+当前限制：
+
+- `sensor_mqtt.c` 仍混合了通用 MQTT transport 和 DHT22/MH-Z19 telemetry，后续应拆为 `mesh_mqtt` 与 `sensor_telemetry`。
+- 传感器数据还没有统一 sensor cache、质量标记、采样时间戳和异常阈值规则。
+- Sensor 节点当前只对白名单 `read_temperature_humidity` command 做直接响应，其它 Mesh command 仍不执行。
+
+下一步：
+
+- 建立 `sensor_cache`，统一保存最近一次温湿度、空气质量、光照、存在检测。
+- telemetry payload 标准化为 JSON schema。
+- 增加环境阈值事件，例如 `air_quality_bad`、`humidity_low`、`presence_changed`。
+
+### Control Agent
+
+地位：
+
+- Control 是执行层，负责真实 GPIO/PWM/I2S/继电器/舵机/灯光动作。
+- 它必须最保守：只执行白名单动作，所有远程动作必须可校验、可限流、可审计。
+- 它不应该直接相信 MQTT payload，更不应该让 MQTT callback 直接调用硬件工具。
+
+当前职责：
+
+- 运行 RGB、GPIO、舵机、继电器、风扇、水泵、加湿器等执行器驱动。
+- 后续接收 Coordinator 下发的 Mesh command。
+- 做本地 safety interlock、命令去重、TTL 检查、状态机和结果上报。
+
+输入：
+
+- 未来的 `espagent/nodes/<control_id>/command`
+- 未来的 `espagent/roles/control_agent/command`
+- 本地串口调试命令。
+
+输出：
+
+- `espagent/nodes/<control_id>/state`
+- `espagent/nodes/<control_id>/events`
+- 未来的 command result / actuator state / timeline event。
+
+已完成进度：
+
+- role/capability 已能让 control profile 启动控制边界。
+- 本地舵机、WS2812、GPIO 等工具已存在。
+- MQTT command 已能被解析并 dry-run 校验 target_node/target_role/action。
+- 历史验证：USB1 之前作为 Control 验证过连接 MQTT、发布 state/events、订阅 role command，并收到一条测试 `gpio_write` command。当前 USB1 已改烧为 Sensor，Control 是后续第三角色目标。
+
+当前限制：
+
+- 还没有 command queue。
+- 还没有 safety interlock。
+- 还没有 actuator registry 和 actuator state。
+- 还没有把 MQTT command 安全转成硬件动作。
+
+下一步：
+
+- 新增 `control/command_queue.c/.h`，先入队、去重、检查 TTL。
+- 新增 `control/safety_interlock.c/.h`，控制危险动作确认、限流和互锁。
+- 新增 `control/actuator_state.c/.h`，记录执行器状态并发布 result event。
+
+### Display / Watchdog Agent
+
+地位：
+
+- Display 是可视化与状态监督层，可运行在 ESP32-S3 简易显示节点，也可以迁移到 ESP32-P4 或 Android App。
+- 它不承担主 LLM，也不直接控制危险硬件。
+- 它负责让多 Agent 调度过程“看得见”：谁发起、谁执行、结果如何、哪里异常。
+
+当前职责：
+
+- 订阅 state、telemetry、timeline、alerts。
+- 展示节点在线状态、环境数据、任务拆解、工具调用、执行结果。
+- 后续做 watchdog：节点离线、telemetry 过期、命令超时、异常告警。
+
+输入：
+
+- `espagent/nodes/+/state`
+- `espagent/nodes/+/telemetry`
+- `espagent/nodes/+/events`
+- `espagent/agent/timeline`
+- `espagent/alerts`
+
+输出：
+
+- 本地屏幕/串口/状态灯展示。
+- 未来可发布 watchdog alert 或 display ack。
+
+已完成进度：
+
+- display role boundary 已接入启动流程。
+- role gating 已修正，`timeline`/`alerts` capability 不会误启动 display service，必须具备 display/state/watchdog/display_agent/edge_agent。
+- Feishu inbound/outbound 基础 timeline 事件已经由 Coordinator 发布。
+
+当前限制：
+
+- 还没有真实屏幕 UI。
+- 还没有 timeline store。
+- 还没有 MQTT wildcard 订阅聚合和 watchdog 规则。
+
+下一步：
+
+- 增加 `display/timeline_store.c/.h`。
+- 增加 state/telemetry 聚合缓存。
+- ESP32-P4 或 Android 作为更完整的 Display Agent 终端。
 
 ## 四节点资源压榨与代码设计
 
@@ -215,6 +449,12 @@ typedef struct {
 3. 再加 `roles/*_node` 骨架，让不同 profile 启动不同服务。
 4. 最后才开放 command 执行，并强制经过 command queue、safety interlock、tool guard 和 timeline event。
 
+当前执行状态：
+
+- 已完成：`mesh_types`、`mesh_protocol`、`roles/*_node` 骨架、role-gated startup、MQTT command dry-run validation。
+- 下一步：拆分 `sensor_mqtt.c` 为通用 `mesh_mqtt` 与 sensor telemetry service。
+- 暂不开放：真实远程 command 执行，必须等 command queue、safety interlock、审计和 timeline event 完成后再接。
+
 ## 主要目录
 
 ```text
@@ -252,6 +492,10 @@ ESPAgent/
 | `main/agent/context_builder.c/.h` | 构建 system prompt，包含工具说明、硬件边界、node profile、memory、recent notes、skills summary。 |
 | `main/llm/llm_proxy.c/.h` | LLM provider HTTP 调用，支持 Anthropic 和 OpenAI-compatible tool-use 解析。 |
 | `main/node/node_profile.c/.h` | 当前节点身份、角色、能力、职责和 capability 检查。用于四 ESP32 分工。 |
+| `main/roles/role_config.c/.h` | 基于 node profile 判断当前节点应运行 LLM、聊天、scheduler、sensor、control、display 哪些服务。 |
+| `main/roles/*_node.c/.h` | coordinator、sensor、control、display 四类 role service 骨架，作为后续职责拆分入口。 |
+| `main/mesh/mesh_types.h` | Mesh command 等公共协议类型定义。 |
+| `main/mesh/mesh_protocol.c/.h` | Mesh topic 构造和 MQTT command JSON 解析/目标校验。 |
 
 ### 通道与网关
 
@@ -401,8 +645,8 @@ Flash 配置为 16MB，自定义分区表：
 
 最近构建结果：
 
-- `build/ESPAgent.bin` size `0x147e40`。
-- 最小 app 分区剩余 `0xb81c0`，约 36%。
+- `build/ESPAgent.bin` size `0x149420`。
+- 最小 app 分区剩余 `0xb6be0`，约 36%。
 
 ## 运行时任务
 
@@ -434,6 +678,7 @@ Flash 配置为 16MB，自定义分区表：
 - 单 agent loop + tool calling + tool registry。
 - SGP30、AHT10/AHT20、BH1750、HC-SR05、WS2812、舵机、MAX98357 等工具或驱动。
 - 高德天气 `get_weather`，默认南京市栖霞区。
+- SNTP 启动校时，默认 `ntp.aliyun.com`；`get_current_time` 优先使用已同步系统时间，HTTP Date 仅作为兜底。
 - Tavily/Brave 搜索。
 - prompt 安全边界和 execution-side tool guard。
 - SPIFFS memory、daily notes、sessions、skills。
@@ -441,6 +686,16 @@ Flash 配置为 16MB，自定义分区表：
 - 反问承接的启发式上下文提示。
 - Agent Mesh Phase 1：node identity、capabilities、responsibilities、MQTT state/telemetry/event、node/role command topic。
 - 四 ESP32 role profile 文档：coordinator、sensor、control、display。
+- Agent Mesh Phase 1.5：新增 `main/mesh` 协议层、`main/roles` 角色服务骨架，并让 `espagent_app` 根据 role/capability 选择性启动 LLM/聊天、scheduler、sensor monitor、control demo、display 边界服务。
+- MQTT node/role command 已接入 `mesh_protocol` 做 JSON schema 解析、`action` 必填校验、`target_node`/`target_role` 匹配校验；除 Sensor `read_temperature_humidity` 白名单外，当前仍是 dry-run 日志，不执行硬件动作。
+- Feishu 通信板 MQTT 桥接已完成第一版：`feishu_inbound` 发布到 node events、`agent/dispatch`、`agent/timeline`，`feishu_outbound` 发布到 node events 和 `agent/timeline`；MQTT queue 支持连接前事件暂存，MQTT packet remaining length 解析已修正。
+- Coordinator 已注册 `mesh_send_command` 工具，可向指定 node 或 role 发布标准 MQTT Mesh command。
+- Sensor 角色已支持白名单 `read_temperature_humidity` Mesh command，并将 AHT10/AHT20 执行结果发布为 `mesh_command_result` 到本节点 events 和全局 timeline。
+- Feishu 通信板时间同步已补齐：Wi-Fi 连接后启动 SNTP 校时，`get_current_time` 不再优先依赖 Google Date 头；天气工具仍使用高德 `get_weather`，默认南京市栖霞区。
+- 本地私有配置当前已设置为 Feishu/LLM 入口板：`esp32s3-coordinator-01` / `coordinator_agent` / `coordinator,communication,llm,dispatch,timeline,alerts`。
+- 已烧录 coordinator 固件到 `/dev/ttyUSB0`，目标 ESP32-S3 MAC 为 `14:c1:9f:2d:76:20`；串口日志确认 Feishu、LLM、agent_loop 和 coordinator role 均启动，本地 sensor monitor 与 boot servo demo 已按角色跳过。
+- 已修复飞书消息统一回复 `抱歉，我这次处理请求时遇到了错误。` 的根因：system prompt 旧 16KB buffer 被截断到 UTF-8 多字节字符中间，导致 OpenAI-compatible LLM API 返回 HTTP 400 `invalid unicode code point`。现在 prompt buffer 为 24KB，`context_builder` 和 `agent_loop` 都做 UTF-8-safe truncation。
+- 修复后已烧录并通过串口 `inject_msg system debug hello` 验证：LLM API 正常返回，最终回复成功进入 outbound。
 - GitHub 远端：
   - HTTPS: `https://github.com/cube1345/ESPAgent.git`
   - SSH: `git@github.com:cube1345/ESPAgent.git`
@@ -449,11 +704,12 @@ Flash 配置为 16MB，自定义分区表：
 ## 当前限制
 
 - 当前仍是单 ESP32-S3 的单 `agent_loop`，不是完整多 Agent 运行时。
-- MQTT command 和 dispatch 现在只打印日志，不执行硬件动作。
-- 还没有 MQTT command schema、鉴权、审计事件和安全执行链路。
+- MQTT command 现在已做基础 schema/目标校验；除 Sensor `read_temperature_humidity` 白名单外，dispatch 仍只打印日志，不执行硬件动作。
+- Sensor 角色只有 `read_temperature_humidity` 白名单执行路径；Control 角色仍不会从 MQTT command 直接执行硬件动作。
+- 还没有 MQTT command queue、鉴权、审计事件、结果关联和完整安全执行链路。
 - 还没有根据 role 自动裁剪工具列表。
-- Coordinator 还没有真实跨节点调度。
-- timeline topic 目前是规划保留，还没有完整 tool_result/event 流。
+- Coordinator 现在会把 Feishu 入站广播到 `agent/dispatch`，但还没有把自然语言任务转成面向 sensor/control/display 节点的正式 Mesh command。
+- timeline topic 已有 Feishu inbound/outbound 基础事件，但还没有完整 tool_use/tool_result 流。
 - Memory 写入依赖模型主动调用文件工具，没有固件侧强制 consolidation。
 - session 只保存最终对话，不保存完整 tool_use/tool_result 轨迹。
 - system prompt 仍集中在 C 字符串中，后续可以拆成 SPIFFS prompt fragments。
@@ -464,8 +720,8 @@ Flash 配置为 16MB，自定义分区表：
 
 ### P0
 
-- 实现 MQTT command schema。
-- 将 MQTT command 安全转入 `message_bus`，由 `agent_loop` 和 `tool_guard` 处理。
+- 实现 Coordinator 对 `mesh_command_result` 的 `command_id` 等待、关联和 Feishu 汇总回复。
+- 将非 sensor 白名单的 MQTT command 安全转入 command queue / `message_bus`，由安全互锁、`agent_loop` 和 `tool_guard` 处理。
 - 发布 timeline events：用户指令、任务拆解、工具调用、工具结果、最终回复。
 - 增加节点 heartbeat / discovery。
 - 增加 `storage_info` CLI，打印 SPIFFS/NVS/session 状态。

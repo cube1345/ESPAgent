@@ -117,8 +117,8 @@
 
 ### [ ] LingShu Agent Mesh Coordinator
 - **Target**: Expand the current ESP32-S3 Edge Agent Node into a multi-node system with Coordinator Agent, Sensor Agent, Control Agent, Memory Agent, Communication Agent, and Display Agent.
-- **Current**: Phase 1 is implemented in firmware: node identity and role profile exist, MQTT publishes state/telemetry/events under `espagent/nodes/<node_id>/...`, node/role command topics are subscribed for observability only, and four ESP32-S3 profiles are documented.
-- **Recommendation**: Keep remote command execution disabled until command schema, authorization, audit events, and message_bus/tool_guard routing are implemented.
+- **Current**: Phase 1.6 is implemented in firmware: node identity and role profile exist; MQTT publishes state/telemetry/events under `espagent/nodes/<node_id>/...`; node/role command topics are subscribed; `main/mesh` parses and validates command JSON; `main/roles` provides coordinator/sensor/control/display service boundaries; `espagent_app` starts LLM/chat, scheduler, sensor monitors, control outputs, and display boundaries according to role/capability. `mesh_send_command` is registered as an LLM-callable Coordinator tool, and `sensor_agent` can execute the whitelisted `read_temperature_humidity` Mesh command and publish `mesh_command_result`.
+- **Recommendation**: Implement Coordinator-side `command_id` result correlation and Feishu summary before enabling broader remote control. Keep control-role hardware execution disabled until command queue, authorization, audit events, safety interlock, and message_bus/tool_guard routing are implemented.
 
 ### [ ] Multi-Channel Manager
 - **Target**: Centralize channel lifecycle if Feishu, WebSocket, serial, and future channels need common management.
@@ -156,6 +156,9 @@
 - [x] Proactive Service (periodic internal checks, NVS target, `PROACTIVE_NO_MESSAGE` suppression)
 - [x] Daily Cron Scheduling (hour/minute local-time jobs for reminders, weather, and check-ins)
 - [x] LingShu Agent Mesh Phase 1 identity and MQTT observability topics
+- [x] LingShu Agent Mesh Phase 1.5 role-gated startup and command dry-run validation
+- [x] Mesh command publish tool (`mesh_send_command`) for Coordinator-to-node/role MQTT commands
+- [x] Sensor-side whitelisted Mesh command result path for `read_temperature_humidity`
 - [x] Four-ESP32 role profile configuration (`coordinator_agent`, `sensor_agent`, `control_agent`, `display_agent`)
 - [x] WebSocket Gateway (port 18789, JSON protocol)
 - [x] Serial CLI (esp_console, debug/maintenance commands)
@@ -179,5 +182,12 @@
 7. Feishu Markdown -> HTML
 8. Media Handling
 9. Heartbeat/proactive observability
-10. Other enhancements
+10. [done] Mesh Phase 1.5 role-gated startup and command dry-run validation
+11. [done] Coordinator `mesh_send_command` publish tool
+12. [done] Sensor whitelisted `read_temperature_humidity` command result event
+13. Coordinator result wait/correlation by `command_id` and Feishu summary reply
+14. Flash and verify a real `sensor_agent` board with AHT10/AHT20 over MQTT
+15. Mesh command queue + authorization + safety interlock + actuator state for `control_agent`
+16. Full timeline events for tool_use/tool_result/remote result
+17. Other enhancements
 ```

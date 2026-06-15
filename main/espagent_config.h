@@ -190,6 +190,7 @@
 /* Feishu Bot */
 #define ESPAGENT_FEISHU_MAX_MSG_LEN          4096
 #define ESPAGENT_FEISHU_POLL_STACK           (12 * 1024)
+#define ESPAGENT_FEISHU_ACK_STACK            (8 * 1024)
 #define ESPAGENT_FEISHU_POLL_PRIO            5
 #define ESPAGENT_FEISHU_POLL_CORE            0
 #define ESPAGENT_FEISHU_WEBHOOK_PORT         18790
@@ -207,6 +208,11 @@
 
 /* Timezone (POSIX TZ format) */
 #define ESPAGENT_TIMEZONE                "CST-8"
+#define ESPAGENT_SNTP_SERVER             "ntp.aliyun.com"
+#define ESPAGENT_SNTP_SYNC_WAIT_MS       10000
+#define ESPAGENT_TIME_VALID_AFTER_EPOCH  1700000000
+#define ESPAGENT_TIME_HTTP_HOST          "www.baidu.com"
+#define ESPAGENT_TIME_HTTP_URL           "https://www.baidu.com/"
 
 /* LLM */
 #define ESPAGENT_LLM_DEFAULT_MODEL       "claude-opus-4-5"
@@ -233,7 +239,7 @@
 #define ESPAGENT_MEMORY_FILE             ESPAGENT_SPIFFS_MEMORY_DIR "/MEMORY.md"
 #define ESPAGENT_SOUL_FILE               ESPAGENT_SPIFFS_CONFIG_DIR "/SOUL.md"
 #define ESPAGENT_USER_FILE               ESPAGENT_SPIFFS_CONFIG_DIR "/USER.md"
-#define ESPAGENT_CONTEXT_BUF_SIZE        (16 * 1024)
+#define ESPAGENT_CONTEXT_BUF_SIZE        (24 * 1024)
 #define ESPAGENT_SESSION_MAX_MSGS        20
 
 /* Agent cache */
@@ -395,3 +401,6 @@
 #define ESPAGENT_ONBOARD_HTTP_PORT    80
 #define ESPAGENT_ONBOARD_DNS_STACK    (4 * 1024)
 #define ESPAGENT_ONBOARD_MAX_SCAN     20
+#ifndef ESPAGENT_ONBOARD_ADMIN_AFTER_WIFI
+#define ESPAGENT_ONBOARD_ADMIN_AFTER_WIFI 0       /* keep STA-only during normal agent runtime */
+#endif

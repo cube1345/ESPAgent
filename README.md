@@ -18,7 +18,11 @@ The current firmware is the first edge-node phase of the planned LingShu Agent M
 - Hardware tools for GPIO, WS2812, servo, MAX98357, AHT10/AHT20, SGP30, BH1750/GY-30, HC-SR05, and environment readings
 - ESP-NOW environment telemetry sender
 - MQTT mesh telemetry/state topics under `espagent/nodes/<node_id>/...`
+- MQTT Mesh command publishing through `mesh_send_command`
+- Four ESP32-S3 role profiles: `coordinator_agent`, `sensor_agent`, `control_agent`, and `display_agent`
 - Wi-Fi onboarding/admin AP under the `ESPAgent-XXXX` network name
+
+Current Mesh boundary: the Coordinator can publish a standard MQTT Mesh command to another node or role, and the Sensor role has a whitelisted `read_temperature_humidity` result path. Control-role hardware execution is still intentionally disabled until command queue, authorization, safety interlock, audit events, and result correlation are implemented.
 
 ## Repository Layout
 
@@ -42,9 +46,12 @@ ESPAgent/
 │   ├── heartbeat/              heartbeat-driven background checks
 │   ├── llm/                    HTTPS LLM provider client and tool-use parser
 │   ├── memory/                 long-term memory and per-chat JSONL sessions
+│   ├── mesh/                   MQTT Mesh command types and protocol validation
+│   ├── node/                   node identity, role, capabilities, responsibilities
 │   ├── onboard/                Wi-Fi onboarding/admin portal
 │   ├── ota/                    HTTPS OTA update support
 │   ├── proxy/                  HTTP CONNECT proxy support
+│   ├── roles/                  coordinator/sensor/control/display role boundaries
 │   ├── sensors/                periodic sensor publishing integrations
 │   ├── skills/                 SPIFFS skill summary loader
 │   └── tools/                  AI-callable tool registry and tool handlers

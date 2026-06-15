@@ -1,6 +1,6 @@
 # Public Knowledge
 
-Last updated: 2026-06-09
+Last updated: 2026-06-15
 
 This file is the required shared handoff document for any AI working in this repository.
 
@@ -53,7 +53,15 @@ Build and maintain a practical ESP32-S3 based ESPAgent firmware that can:
   - SCL: GPIO18
 - Servo motor: GPIO5 (hard-wired, no pin override), LEDC PWM 50Hz, 13-bit resolution, 500-2500us pulse range
 - WebSocket gateway port: `18789`
-- Serial port used for flashing and runtime checks: `/dev/ttyUSB0`
+- Current physical board mapping:
+  - `/dev/ttyUSB0`: `esp32s3-coordinator-01`, `coordinator_agent`
+  - `/dev/ttyUSB1`: `esp32s3-sensor-01`, `sensor_agent`
+  - `/dev/ttyUSB2`: `esp32s3-control-01`, `control_agent`
+  - `/dev/ttyUSB3`: `esp32s3-display-01`, `display_agent`
+- Current temporary MQTT test broker: `broker.emqx.io:1883`
+- Current temporary MQTT topic prefix: `espagent/cube1345`
+- Serial port used for the Feishu/LLM coordinator board: `/dev/ttyUSB0`
+- Serial monitoring note: this workspace may require elevated serial reads for `/dev/ttyUSB0-3`; non-escalated `/dev` scans can transiently miss the devices even when the host sees them.
 - Verified Wi-Fi at runtime on 2026-04-27:
   - SSID: `Redmi K70`
   - Device reported `WiFi connected: yes`
@@ -89,11 +97,38 @@ Important for future AI agents:
 - Conversation logging: All user-LLM exchanges logged with `=== CONV ===` tag visible on serial monitor
 - Serial CLI commands including `config_show`, `wifi_status`, and `tool_exec`
 - Automatic SGP30 periodic reading visible in serial logs
-- 17 registered agent tools total (including web_search, cron, gpio, files, etc.)
+- 25 registered agent tools total, including web search, weather, time, file, GPIO, RGB, servo, sensor, cron, and Mesh command tools.
+- Cross-node MQTT tool:
+  - `mesh_send_command` publishes a standard MQTT Mesh command from the Coordinator to a target node or role.
+  - It is intended for requests such as asking the Feishu board to query `sensor_agent` temperature/humidity or send a command to another ESP32.
+  - Remote execution is still role-limited and must stay behind schema validation and safety boundaries.
+- Agent Mesh MQTT event bridge for the Feishu/LLM coordinator board:
+  - Feishu inbound events publish to node events, `espagent/agent/dispatch`, and `espagent/agent/timeline`
+  - Feishu outbound reply events publish to node events and `espagent/agent/timeline`
+  - MQTT publish queue can buffer events before broker connection and flush after reconnect
+  - MQTT inbound parser supports standard MQTT remaining length decoding
+- Sensor-side Mesh result path:
+  - `sensor_agent` can execute the whitelisted `read_temperature_humidity` Mesh command through the AHT10/AHT20 tool.
+  - It publishes a `mesh_command_result` event to the node events topic and global timeline.
+  - Other node/role commands remain disabled or dry-run until command queue and safety interlock are implemented.
+- Four ESP32 roles are documented in detail in `docs/PUBLIC_KNOWLEDGE_BASE.md`:
+  - Coordinator / Communication Agent: Feishu, WebSocket, LLM, dispatch, timeline, proactive, time/weather/search
+  - Sensor Agent: sensor sampling, telemetry, cache, threshold events
+  - Control Agent: actuator command queue, safety interlock, hardware execution
+  - Display / Watchdog Agent: state, telemetry, timeline, alerts, watchdog visualization
+- Time/weather sync for the Feishu coordinator board:
+  - Wi-Fi connection now starts SNTP time sync with `ntp.aliyun.com`
+  - `get_current_time` prefers the synchronized system clock and only falls back to HTTP Date lookup
+  - HTTP Date fallback no longer targets Google by default
+  - `get_weather` remains the structured Amap weather tool with default Nanjing Qixia District
+- Feishu WebSocket stability:
+  - A stack overflow in the async `feishu_ack` task was reproduced on real Feishu inbound messages.
+  - The ACK task stack is now configured as `ESPAGENT_FEISHU_ACK_STACK` at 8KB.
+  - After reflashing `/dev/ttyUSB0`, Feishu P2P messages again receive normal bot replies instead of resetting during ACK.
 
 ## Safety Improvement Recently Added
 
-Two important behavior-boundary changes were added but are not yet committed:
+Two important behavior-boundary changes exist in the current source tree:
 
 1. Prompt-side rule update in `main/agent/context_builder.c`
    - unsupported hardware / sensor / actuator requests must be refused
@@ -138,61 +173,101 @@ Observed SGP30 sample range during runtime check:
 - eCO2 roughly `400` to `413 ppm`
 - TVOC roughly `0` to `14 ppb`
 
-## Important Limitation Still Remaining
+## Current Progress Snapshot - 2026-06-15
 
-The new guard logic has been compiled and flashed, but the final end-to-end negative test is still pending:
+The project is now in the four-board Coordinator/Sensor/Control/Display bring-up stage.
 
-- Not yet fully verified on-device with a real unsupported user request such as “open the buzzer”.
+Implemented and verified in code:
 
-Reason:
+- One codebase still serves all ESP32-S3 roles through build-time node profiles.
+- `coordinator_agent` is the Feishu/LLM entry board.
+- `sensor_agent` is the downstream sensing-role board.
+- `control_agent` is the downstream actuator-control board.
+- `display_agent` is the downstream timeline/state/watchdog display board.
+- `mesh_send_command` is registered as an LLM-callable tool in `main/tools/tool_registry.c`.
+- Coordinator prompt/tool routing can choose sensor/control role targets from natural language, so the user does not need to provide MQTT node IDs in normal chat.
+- MQTT node/role command parsing validates JSON shape, `action`, target node, target role, TTL, safety level, acknowledgement flag, and args payload.
+- Sensor role has a narrow direct execution path for `read_temperature_humidity` and publishes `mesh_command_result`.
+- Control role can be targeted by Coordinator for WS2812/GPIO-style requests; full remote hardware execution still depends on the safe command queue/interlock path.
+- Feishu WebSocket ACK is now asynchronous with an 8KB stack, avoiding the previous `feishu_ack` stack overflow.
 
-- the existing serial CLI can directly execute tools with `tool_exec`
-- but `tool_exec` bypasses the agent decision path and therefore does not test the guard
-- current serial CLI does not provide a direct “inject user message into agent loop” command
-- WebSocket gateway exists, but host-side connectivity to the board WebSocket endpoint was not yet established during this validation pass
+Verified on physical boards:
 
-## Recommended Next Step
+- `/dev/ttyUSB0` is `esp32s3-coordinator-01` / `coordinator_agent`.
+- `/dev/ttyUSB1` is `esp32s3-sensor-01` / `sensor_agent`.
+- `/dev/ttyUSB2` is `esp32s3-control-01` / `control_agent`.
+- `/dev/ttyUSB3` is `esp32s3-display-01` / `display_agent`.
+- All four roles were flashed in order and later observed on serial as MQTT `state online` publishers.
+- Feishu P2P bot `咕咕嘎嘎！` is connected to the Coordinator board.
+- Feishu message `测试第一角色修复后是否恢复：请回复收到。` produced `ESPAgent is processing your request...` followed by `收到。`.
+- Feishu message `读取温湿度` produced a Coordinator reply saying it had sent a read command to `sensor_agent`.
+- Feishu message `点亮WS2812为蓝色` produced a Coordinator reply saying it had forwarded the command to `control_agent`.
+- `/dev/ttyUSB1` currently logs `DHT22=ESP_ERR_TIMEOUT` and `MH-Z19=ESP_FAIL`; this means the sensor node is online, but those specific physical sensors are not currently returning data on the configured pins.
+
+Still pending:
+
+- Serial/MQTT proof that `sensor_agent` publishes a successful real `mesh_command_result` with actual AHT10/AHT20 data after a Feishu request.
+- Serial/MQTT proof that `control_agent` executes the remote WS2812 command on `/dev/ttyUSB2` and publishes the final result event.
+- Coordinator result correlation: wait for `mesh_command_result`, correlate `command_id`, and summarize the remote result back to Feishu.
+- `command_queue`, `safety_interlock`, `actuator_state`, authorization, audit events, and full tool_use/tool_result timeline.
 
 Best next engineering step:
 
-- add a minimal serial CLI command such as `inject_msg <channel> <chat_id> <text>`
-- make it push a real inbound message onto the message bus
-- then test both:
-  - supported request, for example air-quality query
-  - unsupported request, for example buzzer control
+- Monitor `/dev/ttyUSB0-3` with elevated serial reads while sending one Feishu command at a time.
+- For sensor validation, send `读取温湿度` and verify Coordinator command publish, Sensor command receive, and `mesh_command_result`.
+- For control validation, send `点亮WS2812为蓝色` and verify Coordinator command publish, Control command receive, physical LED change, and result/timeline event.
 
-Expected outcome after that test:
+## Previous Progress Snapshot - 2026-06-14
 
-- supported request should use the correct tool
-- unsupported request should refuse cleanly
-- no nearby hardware tool should be executed as a substitute
+The project is currently in the two-board Coordinator/Sensor bring-up stage.
+
+Implemented and verified in code:
+
+- One codebase still serves all ESP32-S3 roles through build-time node profiles.
+- `coordinator_agent` is the Feishu/LLM entry board.
+- `sensor_agent` is the first downstream sensing-role board.
+- `mesh_send_command` is registered as an LLM-callable tool in `main/tools/tool_registry.c`.
+- Coordinator prompt guidance tells the model to use `mesh_send_command` for remote sensor/control requests.
+- MQTT node/role command parsing validates JSON shape, `action`, target node, target role, TTL, safety level, acknowledgement flag, and args payload.
+- Sensor role has a narrow direct execution path for `read_temperature_humidity` and publishes `mesh_command_result`.
+- Control role still validates remote commands in dry-run mode and does not directly control hardware from the MQTT callback.
+
+Verified on physical boards:
+
+- `/dev/ttyUSB0` has been used as `esp32s3-coordinator-01` / `coordinator_agent`.
+- `/dev/ttyUSB1` has now been flashed as `esp32s3-sensor-01` / `sensor_agent`.
+- USB0 and USB1 flash/hash verification succeeded on 2026-06-14.
+- USB0 boot logs confirmed `coordinator_node: Coordinator role enabled`.
+- USB1 boot logs confirmed `sensor_node: Sensor role enabled`; Feishu, LLM, scheduler/proactive, and boot servo demo were skipped by role policy.
+- USB1 started presence and environment monitor tasks.
+- Latest known coordinator build size: `0x14be80`; latest known sensor build size: `0x14be50`; both leave roughly 35% free in the smallest app partition.
+- Current runtime caveat: both boards reported `NO_AP_FOUND` for the configured Wi-Fi SSID during this flash validation, so MQTT state/events were not revalidated in this pass.
+
+Still pending:
+
+- Physical `sensor_agent` boot is now verified, but AHT10/AHT20-backed `read_temperature_humidity` over MQTT is not yet end-to-end verified.
+- Coordinator does not yet wait for `mesh_command_result`, correlate `command_id`, and summarize the remote result back to Feishu.
+- Control role is not currently flashed on USB1 after this pass; it remains the third-role target.
+- Control role does not yet have `command_queue`, `safety_interlock`, `actuator_state`, authorization, or audit-driven hardware execution.
+- Full tool_use/tool_result timeline has not yet been implemented.
+
+Best next engineering step:
+
+- Bring the configured Wi-Fi network online, or update Wi-Fi credentials.
+- Send `mesh_send_command` from the Feishu/Coordinator board with `target_role="sensor_agent"` and `action="read_temperature_humidity"`.
+- Monitor serial logs and MQTT topics to verify command publication, sensor execution, and `mesh_command_result`.
+- After that, implement Coordinator-side result waiting/correlation before enabling real control execution.
 
 ## Current Repo State To Be Aware Of
 
-As of 2026-04-27:
+As of 2026-06-15:
 
-- uncommitted source changes exist in:
-  - `main/agent/context_builder.c`
-  - `main/agent/agent_loop.c`
-  - `main/tools/tool_registry.c`
-  - `main/tools/tool_servo.c`
-  - `main/tools/tool_servo.h`
-  - `main/espagent_config.h`
-  - `main/espagent_secrets.h`
-  - `main/espagent_secrets.h.example`
-  - `main/CMakeLists.txt`
-  - `main/cJSON_upstream.c` (new)
-  - `main/cJSON_upstream.h` (new)
-  - `main/wifi/wifi_manager.c`
-  - `public_knowledge.md`
-- untracked build directories exist:
-  - `build_idf55/`
-  - `build_v61/`
-
-Guidance:
-
-- do not accidentally commit build output directories
-- do not revert the above source changes unless explicitly asked
+- The current working directory still does not expose a normal Git worktree to `git status`; `.git` exists as an empty read-only directory and `git status` reports that this path is not a Git repository.
+- Push work should use temporary Git metadata outside the project tree, for example `/tmp/espagent_push.git` with `GIT_DIR=/tmp/espagent_push.git` and `GIT_WORK_TREE=/home/cube/WorkSpace/ESP/ESPAgent`.
+- Treat source files as the source of truth and avoid relying on local Git status until the repository metadata is properly restored.
+- Do not commit or publish private `main/espagent_secrets.h`.
+- Do not commit build output directories.
+- Do not revert source changes unless explicitly asked.
 
 ## Project Status Summary
 
@@ -206,12 +281,56 @@ Guidance:
 - Wi-Fi reliability for current configured network: working in current validation
 - “If unsupported, say unsupported” prompt rule: implemented
 - execution-side tool guard: implemented and flashed
-- real negative end-to-end unsupported-request test: pending
+- real negative end-to-end unsupported-request test: partially superseded by `inject_msg` availability, but still should be re-run after every prompt/tool change
 - GPIO pin allowlist documented in system prompt (prevents LLM hallucination)
 - Build ported to ESP-IDF 6.1-dev (cJSON upstream, fixed wifi_manager)
-- guard changes committed to git: pending
+- Mesh command publishing: implemented through `mesh_send_command`
+- Four-board role bring-up: `/dev/ttyUSB0-3` map to coordinator, sensor, control, and display roles, and all four have been observed publishing `state online`
+- Feishu coordinator runtime: restored after the `feishu_ack` stack fix; P2P bot `咕咕嘎嘎！` replies normally again
+- Natural-language role routing: verified through Feishu for `读取温湿度` -> `sensor_agent` and `点亮WS2812为蓝色` -> `control_agent`
+- Sensor Mesh result path for `read_temperature_humidity`: implemented in code; physical sensor-node boot is verified, but successful real sensor result over MQTT is still pending
+- Coordinator result correlation and Feishu summary of remote command results: not implemented yet
 
 ## Update Log
+
+### 2026-06-14
+
+- Built and flashed first-role Coordinator firmware to `/dev/ttyUSB0`:
+  - node: `esp32s3-coordinator-01`
+  - role: `coordinator_agent`
+  - build size: `0x14be80`, smallest app partition free: about 35%
+  - esptool connected to ESP32-S3 MAC `28:84:85:54:20:64`
+  - bootloader, partition table, OTA data, app, and SPIFFS were written and hash-verified
+  - serial boot log confirmed `coordinator_node: Coordinator role enabled`
+- Built and flashed second-role Sensor firmware to `/dev/ttyUSB1`:
+  - node: `esp32s3-sensor-01`
+  - role: `sensor_agent`
+  - build size: `0x14be50`, smallest app partition free: about 35%
+  - esptool connected to ESP32-S3 MAC `28:84:85:54:d7:f4`
+  - bootloader, partition table, OTA data, app, and SPIFFS were written and hash-verified
+  - serial boot log confirmed `sensor_node: Sensor role enabled`
+  - role policy skipped Feishu, LLM, scheduler/proactive, agent loop, and boot servo demo
+  - presence and environment monitor tasks started
+- Runtime caveat from this pass:
+  - both boards reported `NO_AP_FOUND` for the configured Wi-Fi SSID during serial validation
+  - MQTT connection, `state/events`, and `mesh_command_result` were therefore not revalidated after this role reassignment
+- Local build-time node profile in `main/espagent_secrets.h` is currently left as `esp32s3-sensor-01` / `sensor_agent`, matching the last firmware built and flashed to USB1.
+
+### 2026-06-09
+
+- Completed the first MQTT bridge for the Feishu communication ESP32:
+  - `main/channels/feishu/feishu_bot.c` now publishes `feishu_inbound` audit events to node events, Mesh dispatch, and timeline topics.
+  - `main/app/espagent_app.c` now publishes `feishu_outbound` reply events to node events and timeline topics.
+  - `main/sensors/sensor_mqtt.c/.h` now exposes `sensor_mqtt_publish_node_event`, lazily creates the publish queue before MQTT connects, and flushes queued publishes once connected.
+  - MQTT inbound packet handling now decodes standard multi-byte remaining length instead of assuming one-byte payload lengths.
+- Verified with ESP-IDF 6.1-dev `idf.py build`; `build/ESPAgent.bin` generated successfully.
+- Added detailed four-role public knowledge to `docs/PUBLIC_KNOWLEDGE_BASE.md`, covering each role's position, responsibilities, inputs, outputs, current progress, limits, and next steps.
+- Added SNTP-based time sync for the Feishu/LLM coordinator MCU:
+  - new `main/time_sync/time_sync.c/.h`
+  - startup calls SNTP after Wi-Fi connects
+  - `get_current_time` now returns the synchronized local system clock first
+  - fallback HTTP Date source changed away from Google
+- Verified again with ESP-IDF 6.1-dev `idf.py build`; `build/ESPAgent.bin` generated successfully.
 
 ### 2026-06-01
 
@@ -292,6 +411,53 @@ Guidance:
 - Recorded the public GitHub repository URL:
   - `https://github.com/cube1345/ESPAgent.git`
   - SSH push URL remains `git@github.com:cube1345/ESPAgent.git`
+- Implemented Agent Mesh Phase 1.5 code architecture:
+  - Added `main/mesh/mesh_types.h` and `main/mesh/mesh_protocol.c/.h`.
+  - Added `main/roles/role_config.c/.h`.
+  - Added role service skeletons:
+    - `main/roles/coordinator_node.c/.h`
+    - `main/roles/sensor_node.c/.h`
+    - `main/roles/control_node.c/.h`
+    - `main/roles/display_node.c/.h`
+  - `main/app/espagent_app.c` now starts services by role/capability:
+    - coordinator/edge: LLM, Feishu/WebSocket chat, scheduler, proactive.
+    - sensor/edge: local environment/presence/SGP30 monitoring.
+    - control/edge: control-output boundary and boot servo demo.
+    - display/edge: display/timeline/alert boundary logs.
+  - `main/sensors/sensor_mqtt.c` now parses node/role MQTT command payloads through `mesh_protocol` in dry-run mode.
+  - MQTT command validation now checks JSON object shape, required `action`, optional `target_node`, optional `target_role`, `ttl_ms`, `safety_level`, `require_ack`, and `args`/`args_json`.
+  - Remote command execution remains disabled until command_queue, safety_interlock, audit, and result/timeline events are implemented.
+  - Verified with `idf.py build`; `build/ESPAgent.bin` generated successfully with size `0x1492c0`, leaving `0xb6d40` bytes free in the smallest app partition.
+- Updated `docs/PUBLIC_KNOWLEDGE_BASE.md` and `docs/ESP32_ROLE_PROFILES.md` for Mesh Phase 1.5 implementation status.
+- Configured local private `main/espagent_secrets.h` for the Feishu/LLM entry board:
+  - `ESPAGENT_SECRET_NODE_ID`: `esp32s3-coordinator-01`
+  - `ESPAGENT_SECRET_NODE_ROLE`: `coordinator_agent`
+  - capabilities: `coordinator,communication,llm,dispatch,timeline,alerts`
+  - responsibilities: receive user messages, call LLM, plan dispatch, publish timeline, and notify users
+- Fixed role gating so `timeline`/`alerts` capabilities alone no longer enable the display service boundary; display output now requires `display`, `state`, `watchdog`, `display_agent`, or `edge_agent`.
+- Built and flashed coordinator firmware to ESP32-S3 on `/dev/ttyUSB0`:
+  - detected chip: ESP32-S3, MAC `14:c1:9f:2d:76:20`
+  - `build/ESPAgent.bin` size `0x1492b0`, smallest app partition free `0xb6d50`
+  - bootloader, partition table, OTA data, app, and SPIFFS were flashed/verified
+  - final reset completed via RTS
+- Post-flash serial verification confirmed:
+  - Feishu credentials loaded
+  - LLM proxy initialized
+  - agent loop initialized
+  - coordinator role enabled as `esp32s3-coordinator-01`
+  - boot servo demo skipped for `coordinator_agent`
+  - local sensor monitors skipped for `coordinator_agent`
+- Investigated the Feishu-visible error response `抱歉，我这次处理请求时遇到了错误。`.
+  - Serial monitor showed the Feishu/Wi-Fi/coordinator startup path was healthy.
+  - Direct CLI injection reproduced the failure without Feishu: `inject_msg system debug hello`.
+  - Root cause: system prompt filled the old 16KB buffer and was truncated in the middle of a UTF-8 multibyte character, causing the OpenAI-compatible LLM API to reject the request with HTTP 400: `messages[0].content: invalid unicode code point`.
+  - Fixed by increasing `ESPAGENT_CONTEXT_BUF_SIZE` from 16KB to 24KB and adding UTF-8-safe truncation in `main/agent/context_builder.c` and `main/agent/agent_loop.c`.
+  - Built and flashed the fix to `/dev/ttyUSB0`; `build/ESPAgent.bin` size `0x149420`, smallest app partition free `0xb6be0`.
+  - Post-flash CLI injection verified success:
+    - `System prompt built: 18545 bytes`
+    - LLM API returned HTTP 200 JSON response
+    - final response queued successfully
+    - system output: `你好，Echo 在线。`
 
 ### 2026-05-31
 
@@ -311,13 +477,13 @@ Guidance:
 
 - Document created as the required shared progress file for future AI sessions.
 - Recorded current project goals, validated hardware state, build/flash baseline, and repo workflow requirements.
-- Recorded that guard-related source changes are present, flashed, and partially validated, but not yet committed.
+- Recorded that guard-related source changes were present, flashed, and partially validated in that session.
 
 ### 2026-04-27 (second session)
 
 - Ported project to build with ESP-IDF 6.1-dev: removed `json` REQUIRES, bundled upstream cJSON v1.7.15 as `cJSON_upstream.c/h`, fixed `wifi_manager.c` for removed enum.
 - Added servo motor tool `servo_write` on GPIO5 with LEDC PWM (50Hz, 500-2500us).
-- Registered servo in tool_registry (17 total tools).
+- Registered servo in tool_registry (17 total tools at that time; current count is higher).
 
 ### 2026-05-30
 

@@ -100,9 +100,9 @@ Cron and the proactive service use the same inbound queue. Scheduled or self-che
 
 ---
 
-## LingShu Agent Mesh Phase 1
+## LingShu Agent Mesh Phase 1.6
 
-Current ESPAgent firmware models the ESP32-S3 as one Edge Agent Node in the planned LingShu Agent Mesh. This phase keeps the existing single `agent_loop` runtime and adds node identity plus mesh-style MQTT observability.
+Current ESPAgent firmware models the ESP32-S3 as one Edge Agent Node in the planned LingShu Agent Mesh. This phase keeps the existing single `agent_loop` runtime, adds node identity, role-gated startup, mesh-style MQTT observability, and a first narrow cross-node command path.
 
 Current node defaults:
 
@@ -118,15 +118,15 @@ MQTT topics:
 | Topic | Direction | Current behavior |
 |-------|-----------|------------------|
 | `espagent/nodes/<node_id>/state` | publish | Node online state with role/location/timestamp |
-| `espagent/nodes/<node_id>/telemetry` | publish | DHT22/MH-Z19 telemetry with node metadata |
-| `espagent/nodes/<node_id>/events` | publish | MQTT lifecycle events such as connect/reconnect |
-| `espagent/nodes/<node_id>/command` | subscribe | Logs received node commands; does not execute them yet |
-| `espagent/roles/<role>/command` | subscribe | Logs role-targeted commands for coordinator/sensor/control/display groups |
-| `espagent/agent/dispatch` | subscribe | Logs coordinator dispatch messages; no execution yet |
+| `espagent/nodes/<node_id>/telemetry` | publish | Sensor telemetry with node metadata when the role has sensor capability |
+| `espagent/nodes/<node_id>/events` | publish | MQTT lifecycle events, Feishu bridge events, and command result events |
+| `espagent/nodes/<node_id>/command` | subscribe | Validates node-targeted Mesh commands through `mesh_protocol`; execution is role-limited |
+| `espagent/roles/<role>/command` | subscribe | Validates role-targeted Mesh commands for coordinator/sensor/control/display groups |
+| `espagent/agent/dispatch` | subscribe/publish | Coordinator publishes Feishu inbound dispatch events; nodes can observe dispatch messages |
 | `espagent/alerts` | subscribe | Logs alert messages |
-| `espagent/agent/timeline` | reserved | Planned Coordinator/Display Agent timeline stream |
+| `espagent/agent/timeline` | publish/subscribe | Receives Feishu inbound/outbound timeline events and sensor `mesh_command_result` events |
 
-This is intentionally not a full distributed multi-agent runtime yet. Feishu, WebSocket, cron, proactive checks, and future injected messages still converge on the same message bus and the same serial `agent_loop`. Remote MQTT command execution must go through a schema, authorization, and the existing tool guard before it is enabled.
+This is intentionally not a full distributed multi-agent runtime yet. Feishu, WebSocket, cron, proactive checks, and future injected messages still converge on the same message bus and the same serial `agent_loop`. `mesh_send_command` can publish a standard MQTT Mesh command from the Coordinator to a target node or role. Sensor role currently supports the whitelisted `read_temperature_humidity` command and publishes `mesh_command_result`; control-role hardware execution remains disabled until command queue, authorization, safety interlock, audit, and result correlation are implemented.
 
 For four ESP32-S3 boards, use the same firmware and assign different node profiles in `espagent_secrets.h`: `coordinator_agent`, `sensor_agent`, `control_agent`, and `display_agent`. See `docs/ESP32_ROLE_PROFILES.md`.
 
@@ -223,9 +223,22 @@ main/
 │   ├── espnow_sender.h     ESP-NOW telemetry API
 │   └── espnow_sender.c     Peer setup and payload send path
 │
+├── mesh/
+│   ├── mesh_types.h        Mesh command and protocol data types
+│   ├── mesh_protocol.h     Topic builder and command parser API
+│   └── mesh_protocol.c     MQTT command JSON validation and target checks
+│
+├── roles/
+│   ├── role_config.h       Role/capability service-gating API
+│   ├── role_config.c       Coordinator/sensor/control/display runtime policy
+│   ├── coordinator_node.c  Coordinator role boundary
+│   ├── sensor_node.c       Sensor role boundary
+│   ├── control_node.c      Control role boundary
+│   └── display_node.c      Display role boundary
+│
 ├── sensors/
 │   ├── sensor_mqtt.h       Sensor publishing API
-│   └── sensor_mqtt.c       Periodic telemetry publishing
+│   └── sensor_mqtt.c       MQTT state/event/telemetry publishing, Mesh command validation, and sensor result publishing
 │
 ├── onboard/
 │   ├── wifi_onboard.h      Local setup/admin AP API
@@ -444,27 +457,46 @@ app_main()
   ├── session_mgr_init()
   ├── wifi_manager_init()           Init WiFi STA mode + event handlers
   ├── http_proxy_init()             Load proxy config from build-time secrets
-  ├── feishu_bot_init()             Load Feishu app credentials from build-time secrets
-  ├── llm_proxy_init()              Load API key + model from build-time secrets
+  ├── [if coordinator/communication]
+  │   └── feishu_bot_init()         Load Feishu app credentials from build-time secrets
+  ├── [if coordinator/llm]
+  │   └── llm_proxy_init()          Load API key + model from build-time secrets
   ├── tool_registry_init()          Register tools, build tools JSON
-  ├── cron_service_init()
-  ├── heartbeat_init()
-  ├── proactive_service_init()
-  ├── agent_loop_init()
+  ├── [if coordinator/scheduler]
+  │   ├── cron_service_init()
+  │   ├── heartbeat_init()
+  │   └── proactive_service_init()
+  ├── [if coordinator/llm]
+  │   └── agent_loop_init()
+  ├── coordinator_node_init()
+  ├── sensor_node_init()
+  ├── control_node_init()
+  ├── display_node_init()
   ├── serial_cli_init()             Start REPL (works without WiFi)
+  ├── [if control]
+  │   └── boot_servo task
+  ├── [if sensor]
+  │   ├── env_mon task
+  │   ├── presence_mon task
+  │   └── SGP30 monitor
   │
   ├── wifi_manager_start()          Connect using build-time credentials
   │   └── wifi_manager_wait_connected(30s)
   │
   └── [if WiFi connected]
       ├── outbound_dispatch task    Launch outbound task (Core 0)
-      ├── agent_loop_start()        Launch agent_loop task (Core 1)
-      ├── feishu_bot_start()        Launch Feishu WebSocket task (Core 0)
-      ├── sensor_mqtt_start()
-      ├── cron_service_start()
-      ├── heartbeat_start()
-      ├── proactive_service_start()
-      └── ws_server_start()         Start httpd on port 18789
+      ├── coordinator_node_start()
+      ├── sensor_node_start()
+      ├── control_node_start()
+      ├── display_node_start()
+      ├── [if coordinator/llm] agent_loop_start()
+      ├── [if coordinator/communication] feishu_bot_start()
+      ├── sensor_mqtt_start()       Mesh MQTT state/event/telemetry for all roles
+      ├── [if coordinator/scheduler]
+      │   ├── cron_service_start()
+      │   ├── heartbeat_start()
+      │   └── proactive_service_start()
+      └── [if coordinator/communication] ws_server_start()
 ```
 
 If WiFi credentials are missing or connection times out, the CLI remains available for diagnostics.

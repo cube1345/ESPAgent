@@ -1,6 +1,7 @@
 #include "tool_get_time.h"
 #include "espagent_config.h"
 #include "proxy/http_proxy.h"
+#include "time_sync/time_sync.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -16,6 +17,19 @@ static const char *MONTHS[] = {
     "Jan","Feb","Mar","Apr","May","Jun",
     "Jul","Aug","Sep","Oct","Nov","Dec"
 };
+
+static bool format_current_time_if_valid(char *out, size_t out_size)
+{
+    if (!espagent_time_is_valid()) {
+        return false;
+    }
+
+    time_t now = time(NULL);
+    struct tm local = {0};
+    localtime_r(&now, &local);
+    strftime(out, out_size, "%Y-%m-%d %H:%M:%S %Z (%A)", &local);
+    return true;
+}
 
 /* Parse "Sat, 01 Feb 2025 10:25:00 GMT" → set system clock, return formatted string */
 static bool parse_and_set_time(const char *date_str, char *out, size_t out_size)
@@ -61,18 +75,24 @@ static bool parse_and_set_time(const char *date_str, char *out, size_t out_size)
     return true;
 }
 
-/* Fetch time via proxy: HEAD request to www.google.com, parse Date header */
+/* Fetch time via proxy: HEAD request to configured fallback host, parse Date header */
 static esp_err_t fetch_time_via_proxy(char *out, size_t out_size)
 {
-    proxy_conn_t *conn = proxy_conn_open("www.google.com", 443, 10000);
+    proxy_conn_t *conn = proxy_conn_open(ESPAGENT_TIME_HTTP_HOST, 443, 10000);
     if (!conn) return ESP_ERR_HTTP_CONNECT;
 
-    const char *req =
-        "HEAD / HTTP/1.1\r\n"
-        "Host: www.google.com\r\n"
-        "Connection: close\r\n\r\n";
+    char req[256];
+    int req_len = snprintf(req, sizeof(req),
+                           "HEAD / HTTP/1.1\r\n"
+                           "Host: %s\r\n"
+                           "Connection: close\r\n\r\n",
+                           ESPAGENT_TIME_HTTP_HOST);
+    if (req_len <= 0 || req_len >= (int)sizeof(req)) {
+        proxy_conn_close(conn);
+        return ESP_ERR_NO_MEM;
+    }
 
-    if (proxy_conn_write(conn, req, strlen(req)) < 0) {
+    if (proxy_conn_write(conn, req, (size_t)req_len) < 0) {
         proxy_conn_close(conn);
         return ESP_ERR_HTTP_WRITE_DATA;
     }
@@ -136,7 +156,7 @@ static esp_err_t fetch_time_direct(char *out, size_t out_size)
     time_header_ctx_t ctx = {0};
 
     esp_http_client_config_t config = {
-        .url = "https://www.google.com/",
+        .url = ESPAGENT_TIME_HTTP_URL,
         .method = HTTP_METHOD_HEAD,
         .timeout_ms = 10000,
         .crt_bundle_attach = esp_crt_bundle_attach,
@@ -159,7 +179,19 @@ static esp_err_t fetch_time_direct(char *out, size_t out_size)
 
 esp_err_t tool_get_time_execute(const char *input_json, char *output, size_t output_size)
 {
+    (void)input_json;
+    if (!output || output_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     ESP_LOGI(TAG, "Fetching current time...");
+
+    if (format_current_time_if_valid(output, output_size)) {
+        ESP_LOGI(TAG, "Time from system clock: %s", output);
+        return ESP_OK;
+    }
+
+    (void)espagent_time_sync_start();
 
     esp_err_t err;
     if (http_proxy_is_enabled()) {

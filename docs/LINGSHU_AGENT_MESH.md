@@ -72,8 +72,11 @@ Phase 1 新增的 Mesh 能力：
 - 编译期节点 profile：`capabilities` 和 `responsibilities`。
 - system prompt 中明确当前设备是 Edge Agent Node。
 - MQTT telemetry/state/event payload 带节点身份、能力和职责。
-- MQTT 订阅 node command、role command、dispatch、alerts 主题，但当前只打印，不执行远程命令。
+- MQTT 订阅 node command、role command、dispatch、timeline、alerts 主题。
+- Sensor 角色对白名单 `read_temperature_humidity` 支持受限执行并发布 `mesh_command_result`。
+- Coordinator 可以通过 LLM tool calling 将自然语言请求路由到 `sensor_agent` 或 `control_agent`，用户正常对话时不需要手写 MQTT node id。
 - 串口 `config_show` 展示节点身份和关键 MQTT topic。
+- Feishu WebSocket 接入已修复 ACK 栈溢出问题，当前 Coordinator 能稳定收到飞书消息并回复。
 
 ## 技术架构
 
@@ -121,6 +124,27 @@ esp32s3-display-01      display_agent      display,timeline,alerts,state,watchdo
 ```
 
 详细配置见 `docs/ESP32_ROLE_PROFILES.md`。
+
+2026-06-15 实物状态：
+
+```text
+/dev/ttyUSB0  esp32s3-coordinator-01  coordinator_agent  Feishu / LLM / dispatch
+/dev/ttyUSB1  esp32s3-sensor-01       sensor_agent       sensing / telemetry
+/dev/ttyUSB2  esp32s3-control-01      control_agent      RGB / GPIO / actuator boundary
+/dev/ttyUSB3  esp32s3-display-01      display_agent      state / timeline / alerts
+```
+
+已验证：
+
+- 四个节点均可通过串口看到 `state online`。
+- 飞书 P2P bot `咕咕嘎嘎！` 已恢复端到端回复。
+- `读取温湿度` 会被 Coordinator 路由到 `sensor_agent`。
+- `点亮WS2812为蓝色` 会被 Coordinator 路由到 `control_agent`。
+
+仍需补充的验证：
+
+- 抓取 USB0 发布 MQTT command、USB1/USB2 接收 command、下游发布 `mesh_command_result` 的完整串口证据。
+- Control 角色真实执行远程硬件动作前，还需要 command queue、safety interlock、actuator state 和审计事件。
 
 ### 控制层
 
@@ -204,7 +228,7 @@ Display Agent 展示完整调度时间线
 
 - 当前固件不是完整多 Agent 系统，只有一个 ESP32-S3 `agent_loop`。
 - MQTT 使用裸 TCP MQTT 实现，尚未实现 TLS、认证、retain、QoS 完整语义。
-- MQTT command/dispatch 当前只打印，不执行硬件动作。
+- MQTT command/dispatch 当前仍以受限能力为主：Sensor `read_temperature_humidity` 是白名单执行路径，Control 远程硬件执行仍需安全链路完成后再开放。
 - 节点 profile 当前用于身份、能力声明、prompt 和 MQTT payload；还没有根据 role 自动裁剪工具列表。
 - ESP32-P4 本体没有 Wi-Fi 射频，作为 Display Agent 时需要带无线协处理器的开发板或通过 Android/网关接入。
 - MCP、云端 Coordinator、Android App、ESP32-P4 UI 还属于后续扩展。

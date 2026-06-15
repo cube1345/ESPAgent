@@ -1,8 +1,14 @@
 #include "sensors/sensor_mqtt.h"
 
 #include "espagent_config.h"
+#include "mesh/mesh_protocol.h"
 #include "node/node_profile.h"
+#include "roles/role_config.h"
+#include "tools/tool_aht10.h"
+#include "tools/tool_gpio.h"
+#include "tools/tool_servo.h"
 
+#include "cJSON.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
 #include "esp_log.h"
@@ -30,9 +36,18 @@ static const char *TAG = "sensor_mqtt";
 #define MQTT_KEEPALIVE_S       30
 #define MHZ19_CMD_LEN          9
 #define MHZ19_UART_BUF_SIZE    128
+#define MQTT_PUB_TOPIC_SIZE    160
+#define MQTT_PUB_PAYLOAD_SIZE   768
+#define MQTT_PUB_QUEUE_DEPTH    8
+
+typedef struct {
+    char topic[MQTT_PUB_TOPIC_SIZE];
+    char payload[MQTT_PUB_PAYLOAD_SIZE];
+} mqtt_pub_item_t;
 
 static portMUX_TYPE s_dht22_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool s_mhz19_uart_ready = false;
+static QueueHandle_t s_pub_queue = NULL;
 
 static int wait_level_timeout(int pin, int level, int timeout_us)
 {
@@ -232,6 +247,29 @@ static uint8_t *mqtt_write_string(uint8_t *p, const char *s)
     return p + len;
 }
 
+static int mqtt_read_remaining_len(int fd, size_t *out)
+{
+    size_t multiplier = 1;
+    size_t value = 0;
+
+    for (int i = 0; i < 4; i++) {
+        uint8_t byte = 0;
+        int n = recv(fd, &byte, 1, MSG_WAITALL);
+        if (n != 1) {
+            return -1;
+        }
+
+        value += (size_t)(byte & 0x7F) * multiplier;
+        if ((byte & 0x80) == 0) {
+            *out = value;
+            return 0;
+        }
+        multiplier *= 128;
+    }
+
+    return -1;
+}
+
 static int mqtt_send_connect(int fd)
 {
     uint8_t payload[128];
@@ -273,7 +311,11 @@ static int mqtt_subscribe(int fd, const char *topic, uint16_t packet_id)
     packet[0] = 0x82;
     size_t rem_len_len = mqtt_encode_remaining_len(&packet[1], (size_t)(p - payload));
     memcpy(packet + 1 + rem_len_len, payload, (size_t)(p - payload));
-    return write_all(fd, packet, 1 + rem_len_len + (size_t)(p - payload));
+    int ret = write_all(fd, packet, 1 + rem_len_len + (size_t)(p - payload));
+    if (ret == 0) {
+        ESP_LOGI(TAG, "MQTT subscribe %s", topic);
+    }
+    return ret;
 }
 
 static int mqtt_publish(int fd, const char *topic, const char *payload)
@@ -298,6 +340,199 @@ static bool mqtt_topic_equals(const uint8_t *topic, size_t topic_len, const char
 {
     size_t expected_len = strlen(expected);
     return topic_len == expected_len && memcmp(topic, expected, expected_len) == 0;
+}
+
+static void mqtt_publish_node_event_json(char *json, size_t json_size,
+                                         const char *event_type, const char *detail)
+{
+    int64_t ts_ms = esp_timer_get_time() / 1000;
+    snprintf(json, json_size,
+             "{\"node_id\":\"%s\",\"role\":\"%s\",\"location\":\"%s\","
+             "\"capabilities\":\"%s\","
+             "\"type\":\"event\",\"event\":\"%s\",\"detail\":\"%s\","
+             "\"ts_ms\":%lld}",
+             espagent_node_id(), espagent_node_role(), espagent_node_location(),
+             espagent_node_capabilities(),
+             event_type ? event_type : "",
+             detail ? detail : "",
+             (long long)ts_ms);
+}
+
+static esp_err_t mqtt_queue_publish(const char *topic, const char *payload)
+{
+    if (!topic || !topic[0] || !payload || !payload[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (ESPAGENT_SENSOR_MQTT_BROKER[0] == '\0') {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!s_pub_queue) {
+        s_pub_queue = xQueueCreate(MQTT_PUB_QUEUE_DEPTH, sizeof(mqtt_pub_item_t));
+        if (!s_pub_queue) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    mqtt_pub_item_t item = {0};
+    snprintf(item.topic, sizeof(item.topic), "%s", topic);
+    snprintf(item.payload, sizeof(item.payload), "%s", payload);
+
+    if (xQueueSend(s_pub_queue, &item, 0) != pdPASS) {
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
+static void mqtt_flush_queued_publishes(int fd)
+{
+    if (!s_pub_queue) {
+        return;
+    }
+
+    mqtt_pub_item_t item;
+    while (xQueueReceive(s_pub_queue, &item, 0) == pdPASS) {
+        if (mqtt_publish(fd, item.topic, item.payload) != 0) {
+            ESP_LOGW(TAG, "Queued MQTT publish failed: topic=%s", item.topic);
+            continue;
+        }
+        ESP_LOGI(TAG, "MQTT publish %s: %s", item.topic, item.payload);
+    }
+}
+
+esp_err_t sensor_mqtt_publish_text(const char *topic, const char *payload)
+{
+    return mqtt_queue_publish(topic, payload);
+}
+
+esp_err_t sensor_mqtt_publish_node_event(const char *event_type, const char *detail)
+{
+    char json[512];
+    mqtt_publish_node_event_json(json, sizeof(json), event_type, detail);
+    return mqtt_queue_publish(ESPAGENT_SENSOR_MQTT_TOPIC_EVENTS, json);
+}
+
+static void publish_mesh_command_result(const espagent_mesh_command_t *cmd,
+                                        esp_err_t result_err,
+                                        const char *result)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return;
+    }
+
+    int64_t ts_ms = esp_timer_get_time() / 1000;
+    cJSON_AddStringToObject(root, "node_id", espagent_node_id());
+    cJSON_AddStringToObject(root, "role", espagent_node_role());
+    cJSON_AddStringToObject(root, "location", espagent_node_location());
+    cJSON_AddStringToObject(root, "type", "event");
+    cJSON_AddStringToObject(root, "event", "mesh_command_result");
+    cJSON_AddStringToObject(root, "command_id", cmd->command_id);
+    cJSON_AddStringToObject(root, "action", cmd->action);
+    cJSON_AddStringToObject(root, "status", result_err == ESP_OK ? "ok" : "error");
+    cJSON_AddStringToObject(root, "esp_err", esp_err_to_name(result_err));
+    cJSON_AddStringToObject(root, "result", result ? result : "");
+    cJSON_AddNumberToObject(root, "ts_ms", (double)ts_ms);
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) {
+        return;
+    }
+
+    (void)sensor_mqtt_publish_text(ESPAGENT_SENSOR_MQTT_TOPIC_EVENTS, json);
+    (void)sensor_mqtt_publish_text(ESPAGENT_MESH_TOPIC_TIMELINE, json);
+    cJSON_free(json);
+}
+
+static bool handle_sensor_mesh_command(const espagent_mesh_command_t *cmd)
+{
+    if (!espagent_role_is_sensor()) {
+        return false;
+    }
+    if (strcmp(cmd->action, "read_temperature_humidity") != 0) {
+        return false;
+    }
+
+    char result[384] = {0};
+    esp_err_t err = tool_aht10_read_temperature_humidity_execute(
+        cmd->args_json[0] ? cmd->args_json : "{}",
+        result,
+        sizeof(result));
+    ESP_LOGI(TAG, "Mesh sensor command executed: id=%s action=%s status=%s result=%s",
+             cmd->command_id[0] ? cmd->command_id : "(none)",
+             cmd->action,
+             esp_err_to_name(err),
+             result);
+    publish_mesh_command_result(cmd, err, result);
+    return true;
+}
+
+static bool handle_control_mesh_command(const espagent_mesh_command_t *cmd)
+{
+    if (!espagent_role_is_control()) {
+        return false;
+    }
+
+    esp_err_t err = ESP_ERR_NOT_SUPPORTED;
+    char result[384] = {0};
+    const char *args = cmd->args_json[0] ? cmd->args_json : "{}";
+
+    if (cmd->safety_level > ESPAGENT_MESH_SAFETY_MEDIUM) {
+        snprintf(result, sizeof(result),
+                 "Error: command safety_level=%d requires a future safety interlock",
+                 cmd->safety_level);
+        err = ESP_ERR_INVALID_ARG;
+    } else if (strcmp(cmd->action, "set_status_light") == 0) {
+        err = tool_set_status_light_execute(args, result, sizeof(result));
+    } else if (strcmp(cmd->action, "ws2812_set") == 0) {
+        err = tool_ws2812_set_execute(args, result, sizeof(result));
+    } else if (strcmp(cmd->action, "servo_write") == 0) {
+        err = tool_servo_write_execute(args, result, sizeof(result));
+    } else if (strcmp(cmd->action, "gpio_write") == 0) {
+        err = tool_gpio_write_execute(args, result, sizeof(result));
+    } else {
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Mesh control command executed: id=%s action=%s status=%s result=%s",
+             cmd->command_id[0] ? cmd->command_id : "(none)",
+             cmd->action,
+             esp_err_to_name(err),
+             result);
+    publish_mesh_command_result(cmd, err, result);
+    return true;
+}
+
+static void handle_mesh_command(const char *source, const char *payload, size_t payload_len)
+{
+    espagent_mesh_command_t cmd;
+    char err[128] = {0};
+    esp_err_t parse_err = espagent_mesh_parse_command_json(payload, payload_len, &cmd, err, sizeof(err));
+    if (parse_err != ESP_OK) {
+        ESP_LOGW(TAG, "Mesh %s command rejected before execution: %s payload=%.*s",
+                 source, err, (int)payload_len, payload);
+        return;
+    }
+
+    ESP_LOGI(TAG,
+             "Mesh %s command validated in dry-run mode: id=%s action=%s target_node=%s target_role=%s safety=%d ttl_ms=%d args=%s",
+             source,
+             cmd.command_id[0] ? cmd.command_id : "(none)",
+             cmd.action,
+             cmd.target_node[0] ? cmd.target_node : "(any)",
+             cmd.target_role[0] ? cmd.target_role : "(any)",
+             cmd.safety_level,
+             cmd.ttl_ms,
+             cmd.args_json);
+
+    if (handle_sensor_mesh_command(&cmd)) {
+        return;
+    }
+    if (handle_control_mesh_command(&cmd)) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Mesh command execution remains disabled until command_queue and safety_interlock are implemented");
 }
 
 static int mqtt_connect_tcp(void)
@@ -340,16 +575,22 @@ static int mqtt_connect_tcp(void)
 
 static void mqtt_poll_inbound(int fd)
 {
-    uint8_t header[2] = {0};
-    int n = recv(fd, header, sizeof(header), MSG_DONTWAIT);
+    uint8_t header = 0;
+    int n = recv(fd, &header, 1, MSG_DONTWAIT);
     if (n <= 0) {
         return;
     }
 
-    uint8_t packet_type = header[0] & 0xF0;
-    size_t remaining = header[1];
+    uint8_t packet_type = header & 0xF0;
+    size_t remaining = 0;
+    if (mqtt_read_remaining_len(fd, &remaining) != 0) {
+        ESP_LOGW(TAG, "MQTT packet remaining length decode failed");
+        return;
+    }
+
     uint8_t payload[MQTT_BUF_SIZE];
     if (remaining >= sizeof(payload)) {
+        ESP_LOGW(TAG, "MQTT inbound packet too large: %d bytes", (int)remaining);
         return;
     }
     n = recv(fd, payload, remaining, MSG_WAITALL);
@@ -366,9 +607,11 @@ static void mqtt_poll_inbound(int fd)
             if (mqtt_topic_equals(topic, topic_len, ESPAGENT_SENSOR_MQTT_TOPIC_COMMAND)) {
                 ESP_LOGI(TAG, "Mesh command received for %s: %.*s",
                          ESPAGENT_NODE_ID, (int)msg_len, msg);
+                handle_mesh_command("node", msg, msg_len);
             } else if (mqtt_topic_equals(topic, topic_len, ESPAGENT_MESH_TOPIC_ROLE_COMMAND)) {
                 ESP_LOGI(TAG, "Mesh role command received for %s: %.*s",
                          ESPAGENT_NODE_ROLE, (int)msg_len, msg);
+                handle_mesh_command("role", msg, msg_len);
             } else if (mqtt_topic_equals(topic, topic_len, ESPAGENT_MESH_TOPIC_DISPATCH)) {
                 ESP_LOGI(TAG, "Mesh dispatch received: %.*s", (int)msg_len, msg);
             } else if (mqtt_topic_equals(topic, topic_len, ESPAGENT_MESH_TOPIC_ALERTS)) {
@@ -404,15 +647,7 @@ static esp_err_t publish_node_state(int fd, const char *state)
 static esp_err_t publish_node_event(int fd, const char *event_type, const char *detail)
 {
     char json[512];
-    int64_t ts_ms = esp_timer_get_time() / 1000;
-    snprintf(json, sizeof(json),
-             "{\"node_id\":\"%s\",\"role\":\"%s\",\"location\":\"%s\","
-             "\"capabilities\":\"%s\","
-             "\"type\":\"event\",\"event\":\"%s\",\"detail\":\"%s\","
-             "\"ts_ms\":%lld}",
-             espagent_node_id(), espagent_node_role(), espagent_node_location(),
-             espagent_node_capabilities(),
-             event_type, detail ? detail : "", (long long)ts_ms);
+    mqtt_publish_node_event_json(json, sizeof(json), event_type, detail);
 
     if (mqtt_publish(fd, ESPAGENT_SENSOR_MQTT_TOPIC_EVENTS, json) != 0) {
         return ESP_FAIL;
@@ -438,7 +673,7 @@ static esp_err_t publish_sensor_data(int fd)
     if (dht_err != ESP_OK || co2_err != ESP_OK) {
         ESP_LOGW(TAG, "skip MQTT publish: DHT22=%s MH-Z19=%s",
                  esp_err_to_name(dht_err), esp_err_to_name(co2_err));
-        return ESP_FAIL;
+        return publish_node_state(fd, "online");
     }
 
     char json[384];
@@ -462,6 +697,7 @@ static esp_err_t publish_sensor_data(int fd)
 static void sensor_mqtt_task(void *arg)
 {
     (void)arg;
+    const bool publish_telemetry = espagent_role_runs_sensor_sampling();
 
     while (1) {
         int fd = mqtt_connect_tcp();
@@ -484,9 +720,17 @@ static void sensor_mqtt_task(void *arg)
 
         while (1) {
             mqtt_poll_inbound(fd);
-            if (publish_sensor_data(fd) != ESP_OK) {
-                ESP_LOGW(TAG, "MQTT publish failed, reconnecting");
-                publish_node_event(fd, "mqtt_reconnect", "telemetry publish failed");
+            mqtt_flush_queued_publishes(fd);
+            if (publish_telemetry) {
+                esp_err_t telemetry_err = publish_sensor_data(fd);
+                if (telemetry_err == ESP_FAIL) {
+                    ESP_LOGW(TAG, "MQTT publish failed, reconnecting");
+                    publish_node_event(fd, "mqtt_reconnect", "telemetry publish failed");
+                    close(fd);
+                    break;
+                }
+            } else if (publish_node_state(fd, "online") != ESP_OK) {
+                ESP_LOGW(TAG, "MQTT state publish failed, reconnecting");
                 close(fd);
                 break;
             }
@@ -500,6 +744,14 @@ esp_err_t sensor_mqtt_start(void)
     if (ESPAGENT_SENSOR_MQTT_BROKER[0] == '\0') {
         ESP_LOGI(TAG, "Sensor MQTT disabled: ESPAGENT_SECRET_SENSOR_MQTT_BROKER is empty");
         return ESP_OK;
+    }
+
+    if (!s_pub_queue) {
+        s_pub_queue = xQueueCreate(MQTT_PUB_QUEUE_DEPTH, sizeof(mqtt_pub_item_t));
+        if (!s_pub_queue) {
+            ESP_LOGE(TAG, "Failed to create MQTT publish queue");
+            return ESP_ERR_NO_MEM;
+        }
     }
 
     BaseType_t ok = xTaskCreatePinnedToCore(sensor_mqtt_task, "sensor_mqtt",

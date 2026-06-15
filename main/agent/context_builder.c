@@ -6,6 +6,7 @@
 
 #include "esp_log.h"
 
+#include <stdbool.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +15,61 @@ static const char *TAG = "context";
 
 #define ESPAGENT_STRINGIFY_IMPL(x) #x
 #define ESPAGENT_STRINGIFY(x) ESPAGENT_STRINGIFY_IMPL(x)
+
+static size_t utf8_expected_len(unsigned char c)
+{
+    if (c < 0x80) {
+        return 1;
+    }
+    if ((c & 0xE0) == 0xC0) {
+        return 2;
+    }
+    if ((c & 0xF0) == 0xE0) {
+        return 3;
+    }
+    if ((c & 0xF8) == 0xF0) {
+        return 4;
+    }
+    return 0;
+}
+
+static size_t utf8_safe_prefix_len(const char *buf, size_t len)
+{
+    size_t i = 0;
+    size_t last_good = 0;
+
+    while (i < len) {
+        unsigned char c = (unsigned char)buf[i];
+        size_t need = utf8_expected_len(c);
+        if (need == 0 || i + need > len) {
+            break;
+        }
+
+        bool valid = true;
+        for (size_t j = 1; j < need; j++) {
+            unsigned char cc = (unsigned char)buf[i + j];
+            if ((cc & 0xC0) != 0x80) {
+                valid = false;
+                break;
+            }
+        }
+        if (!valid) {
+            break;
+        }
+
+        i += need;
+        last_good = i;
+    }
+
+    return last_good;
+}
+
+static size_t terminate_at_utf8_boundary(char *buf, size_t len)
+{
+    size_t safe = utf8_safe_prefix_len(buf, len);
+    buf[safe] = '\0';
+    return safe;
+}
 
 static size_t append_format(char *buf, size_t size, size_t offset,
                             const char *fmt, ...)
@@ -36,8 +92,7 @@ static size_t append_format(char *buf, size_t size, size_t offset,
         return offset;
     }
     if ((size_t)n >= size - offset) {
-        buf[size - 1] = '\0';
-        return size - 1;
+        return terminate_at_utf8_boundary(buf, size - 1);
     }
     return offset + (size_t)n;
 }
@@ -67,7 +122,7 @@ static size_t append_file(char *buf, size_t size, size_t offset, const char *pat
 
     size_t n = fread(buf + offset, 1, size - offset - 1, f);
     offset += n;
-    buf[offset] = '\0';
+    offset = terminate_at_utf8_boundary(buf, offset);
     fclose(f);
     return offset;
 }
@@ -96,7 +151,8 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
         "- web_search: Search the web for current information (Tavily preferred, Brave fallback when configured). Use this for up-to-date facts.\n"
         "- get_weather: Get structured current or forecast weather from Amap WebService. Prefer this over web_search for weather, temperature, rain, wind, forecast, 出门建议, 天气, 气温, 下雨, 降温, 穿衣, or daily proactive weather.\n"
         "- get_current_time: Get the current date and time. You do NOT have an internal clock, so use this tool when time matters.\n"
-        "- read_temperature_humidity: Read temperature and humidity from the AHT20/AHT10 I2C sensor. Prefer this when the user asks only about room temperature, humidity, AHT20, AHT10, 温度, 湿度, or 温湿度.\n"
+        "- read_temperature_humidity: Read temperature and humidity from this board's local AHT20/AHT10 I2C sensor. On coordinator_agent, only use this for explicit local board or I2C diagnostics.\n"
+        "- mesh_send_command: Publish an MQTT Mesh command to another ESPAgent node or role. Use this from the coordinator when a user request should be routed to a remote role such as sensor_agent or control_agent.\n"
         "- read_environment: Read AHT20 temperature/humidity, SGP30 eCO2/TVOC, and GY-30/BH1750 light in one 3-I2C call: AHT20 uses hardware I2C0, SGP30 uses hardware I2C1, and GY-30 uses software I2C. Prefer this for combined environment tests or when the user asks to read all environment sensors.\n"
         "- read_presence: High-level tool to read human presence. It supports a 3-wire digital OUT human/PIR sensor and can also use HC-SR05 ultrasonic proximity when Trig/Echo pins are configured. Prefer this when the user asks whether someone is nearby, whether a person is present, or asks about proximity/distance from the human sensor.\n"
         "- hc_sr05_read_distance: Lower-level HC-SR05 ultrasonic distance read for explicit HC-SR05, Trig/Echo, or distance diagnostics.\n"
@@ -127,7 +183,10 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
         "Use sgp30_read_air_quality when the user explicitly mentions SGP30, I2C pin overrides, SDA/SCL wiring, or direct sensor debugging.\n"
         "For SGP30 reads, use configured default SDA/SCL pins when available; otherwise only call the tool if the user provides I2C pin details.\n"
         "For ambient light, illuminance, lux, GY-30, BH1750, 光照, 光线亮度, 照度, 勒克斯, or checking how bright the environment is, use read_light_level. Default GY-30/BH1750 wiring is SDA=GPIO " ESPAGENT_STRINGIFY(ESPAGENT_BH1750_DEFAULT_SDA_GPIO) ", SCL=GPIO " ESPAGENT_STRINGIFY(ESPAGENT_BH1750_DEFAULT_SCL_GPIO) ", address=" ESPAGENT_STRINGIFY(ESPAGENT_BH1750_DEFAULT_ADDR) ". If the sensor is not found at 0x23, try address=0x5C.\n"
-        "For temperature/humidity requests, use read_temperature_humidity. It is backed by AHT20/AHT10 on SDA=GPIO " ESPAGENT_STRINGIFY(ESPAGENT_AHT10_DEFAULT_SDA_GPIO) ", SCL=GPIO " ESPAGENT_STRINGIFY(ESPAGENT_AHT10_DEFAULT_SCL_GPIO) ", address=" ESPAGENT_STRINGIFY(ESPAGENT_AHT10_DEFAULT_ADDR) ". Do not use legacy DHT11 guidance unless the user explicitly says they rewired a DHT11.\n"
+        "If this node is coordinator_agent and the user asks ordinary temperature/humidity questions such as '读取温湿度', '读一下温度', '湿度多少', or asks for room/environment temperature without naming this board's local I2C sensor, use mesh_send_command with target_role=\"sensor_agent\", action=\"read_temperature_humidity\", and args={}. The user does not need to know or provide an MQTT topic, node id, or receiver id. Do not ask whether the user means local or remote for ordinary temperature/humidity requests; this is not ambiguous in coordinator_agent mode and must default to sensor_agent.\n"
+        "If this node is coordinator_agent and the user asks to control a remote actuator, a third board, a control board, a relay, a fan, a pump, a servo, GPIO output, or a remote/status light, use mesh_send_command with target_role=\"control_agent\" and the matching action such as set_status_light, ws2812_set, servo_write, or gpio_write. The user does not need to know the control node id or MQTT topic. Do not execute remote actuator requests locally on the coordinator board unless the user explicitly says this board/local board.\n"
+        "On coordinator_agent, use read_temperature_humidity only when the user explicitly asks to test this board's local AHT20/AHT10 sensor, this board's SDA/SCL wiring, or direct I2C diagnostics.\n"
+        "On sensor_agent or edge_agent, for local temperature/humidity requests, use read_temperature_humidity. It is backed by AHT20/AHT10 on SDA=GPIO " ESPAGENT_STRINGIFY(ESPAGENT_AHT10_DEFAULT_SDA_GPIO) ", SCL=GPIO " ESPAGENT_STRINGIFY(ESPAGENT_AHT10_DEFAULT_SCL_GPIO) ", address=" ESPAGENT_STRINGIFY(ESPAGENT_AHT10_DEFAULT_ADDR) ". Do not use legacy DHT11 guidance unless the user explicitly says they rewired a DHT11.\n"
         "Prefer read_presence over hc_sr05_read_distance unless the user explicitly asks for direct HC-SR05 distance, Trig/Echo wiring, or sensor diagnostics.\n"
         "If the user says things like 'is anyone there', 'is someone nearby', 'detect a person', 'human sensor', 'presence sensor', 'proximity', 'distance sensor', 'HC-SR05', '有人吗', '有人靠近吗', '人体传感器', '检测人体', '测一下距离', '距离多少', or '超声波传感器', use read_presence.\n"
         "For a 3-wire presence sensor, read_presence uses OUT=GPIO " ESPAGENT_STRINGIFY(ESPAGENT_PRESENCE_DEFAULT_GPIO) " and reports present=true when OUT is HIGH. If OUT is -1, ask the user to configure ESPAGENT_SECRET_PRESENCE_GPIO or provide out_gpio. For HC-SR05 ultrasonic mode, it reports present=true/false plus distance_cm; do not claim it confirms body heat or identity. Default HC-SR05 pins are Trig=GPIO " ESPAGENT_STRINGIFY(ESPAGENT_HC_SR05_DEFAULT_TRIG_GPIO) ", Echo=GPIO " ESPAGENT_STRINGIFY(ESPAGENT_HC_SR05_DEFAULT_ECHO_GPIO) ", threshold=" ESPAGENT_STRINGIFY(ESPAGENT_HC_SR05_PRESENT_THRESHOLD_CM) "cm.\n"

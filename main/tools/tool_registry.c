@@ -4,6 +4,7 @@
 #include "tools/tool_cron.h"
 #include "tools/tool_files.h"
 #include "tools/tool_get_time.h"
+#include "tools/tool_mesh_command.h"
 #include "tools/tool_gpio.h"
 #include "tools/tool_aht10.h"
 #include "tools/tool_environment.h"
@@ -14,6 +15,7 @@
 #include "tools/tool_bh1750.h"
 #include "tools/tool_web_search.h"
 #include "tools/tool_amap_weather.h"
+#include "roles/role_config.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -22,11 +24,150 @@
 
 static const char *TAG = "tools";
 
-#define MAX_TOOLS 25
+#define MAX_TOOLS 28
 
 static espagent_tool_t s_tools[MAX_TOOLS];
 static int s_tool_count = 0;
 static char *s_tools_json = NULL;
+
+static bool json_has_key(cJSON *root, const char *key)
+{
+    return root && cJSON_GetObjectItem(root, key) != NULL;
+}
+
+static bool json_bool_value(cJSON *root, const char *key, bool default_value)
+{
+    cJSON *item = root ? cJSON_GetObjectItem(root, key) : NULL;
+    if (!item) {
+        return default_value;
+    }
+    return cJSON_IsTrue(item);
+}
+
+static esp_err_t tool_read_temperature_humidity_execute(const char *input_json,
+                                                        char *output,
+                                                        size_t output_size)
+{
+    cJSON *root = cJSON_Parse(input_json && input_json[0] ? input_json : "{}");
+    bool local = false;
+    bool has_local_diagnostics = false;
+    if (root && cJSON_IsObject(root)) {
+        local = json_bool_value(root, "local", false);
+        has_local_diagnostics = json_has_key(root, "sda_gpio") ||
+                                json_has_key(root, "scl_gpio") ||
+                                json_has_key(root, "i2c_port") ||
+                                json_has_key(root, "scl_hz") ||
+                                json_has_key(root, "address");
+    }
+    if (root) {
+        cJSON_Delete(root);
+    }
+
+    if (espagent_role_is_coordinator() && !local && !has_local_diagnostics) {
+        return tool_mesh_send_command_execute(
+            "{\"target_role\":\"sensor_agent\",\"action\":\"read_temperature_humidity\",\"args\":{}}",
+            output,
+            output_size);
+    }
+
+    return tool_aht10_read_temperature_humidity_execute(input_json, output, output_size);
+}
+
+typedef esp_err_t (*tool_exec_fn_t)(const char *input_json, char *output, size_t output_size);
+
+static esp_err_t route_control_action_to_mesh(const char *action,
+                                              const char *input_json,
+                                              char *output,
+                                              size_t output_size)
+{
+    cJSON *args = cJSON_Parse(input_json && input_json[0] ? input_json : "{}");
+    if (!args || !cJSON_IsObject(args)) {
+        if (args) {
+            cJSON_Delete(args);
+        }
+        args = cJSON_CreateObject();
+    }
+    if (!args) {
+        snprintf(output, output_size, "Error: out of memory");
+        return ESP_ERR_NO_MEM;
+    }
+    cJSON_DeleteItemFromObject(args, "local");
+
+    cJSON *cmd = cJSON_CreateObject();
+    if (!cmd) {
+        cJSON_Delete(args);
+        snprintf(output, output_size, "Error: out of memory");
+        return ESP_ERR_NO_MEM;
+    }
+    cJSON_AddStringToObject(cmd, "target_role", "control_agent");
+    cJSON_AddStringToObject(cmd, "action", action);
+    cJSON_AddItemToObject(cmd, "args", args);
+
+    char *payload = cJSON_PrintUnformatted(cmd);
+    cJSON_Delete(cmd);
+    if (!payload) {
+        snprintf(output, output_size, "Error: out of memory");
+        return ESP_ERR_NO_MEM;
+    }
+
+    esp_err_t err = tool_mesh_send_command_execute(payload, output, output_size);
+    cJSON_free(payload);
+    return err;
+}
+
+static esp_err_t coordinator_control_or_local(const char *action,
+                                              const char *input_json,
+                                              char *output,
+                                              size_t output_size,
+                                              tool_exec_fn_t local_execute)
+{
+    cJSON *root = cJSON_Parse(input_json && input_json[0] ? input_json : "{}");
+    bool local = false;
+    if (root && cJSON_IsObject(root)) {
+        local = json_bool_value(root, "local", false);
+    }
+    if (root) {
+        cJSON_Delete(root);
+    }
+
+    if (espagent_role_is_coordinator() && !local) {
+        return route_control_action_to_mesh(action, input_json, output, output_size);
+    }
+
+    return local_execute(input_json, output, output_size);
+}
+
+static esp_err_t tool_gpio_write_routed_execute(const char *input_json,
+                                                char *output,
+                                                size_t output_size)
+{
+    return coordinator_control_or_local("gpio_write", input_json, output, output_size,
+                                        tool_gpio_write_execute);
+}
+
+static esp_err_t tool_ws2812_set_routed_execute(const char *input_json,
+                                                char *output,
+                                                size_t output_size)
+{
+    return coordinator_control_or_local("ws2812_set", input_json, output, output_size,
+                                        tool_ws2812_set_execute);
+}
+
+static esp_err_t tool_set_status_light_routed_execute(const char *input_json,
+                                                      char *output,
+                                                      size_t output_size)
+{
+    return coordinator_control_or_local("set_status_light", input_json, output, output_size,
+                                        tool_set_status_light_execute);
+}
+
+static esp_err_t tool_servo_write_routed_execute(const char *input_json,
+                                                 char *output,
+                                                 size_t output_size)
+{
+    return coordinator_control_or_local("servo_write", input_json, output, output_size,
+                                        tool_servo_write_execute);
+}
 
 static void register_tool(const espagent_tool_t *tool)
 {
@@ -104,16 +245,35 @@ esp_err_t tool_registry_init(void)
 
     register_tool(&(espagent_tool_t){
         .name = "read_temperature_humidity",
-        .description = "Read temperature and humidity from an AHT10 I2C sensor. Use this when the user asks about room temperature, humidity, AHT10 readings, 温度, 湿度, or 温湿度. Optional SDA/SCL GPIO overrides can be provided for wiring diagnostics.",
+        .description = "Read temperature and humidity from this board's local AHT10/AHT20 I2C sensor. On a coordinator_agent, do not use this for ordinary Feishu room temperature/humidity requests; route those through mesh_send_command to sensor_agent unless the user explicitly asks for this board, local sensor, or I2C wiring diagnostics. Optional SDA/SCL GPIO overrides can be provided for wiring diagnostics.",
         .input_schema_json =
             "{\"type\":\"object\","
             "\"properties\":{\"sda_gpio\":{\"type\":\"integer\",\"description\":\"Optional SDA GPIO override\"},"
             "\"scl_gpio\":{\"type\":\"integer\",\"description\":\"Optional SCL GPIO override\"},"
             "\"i2c_port\":{\"type\":\"integer\",\"description\":\"Optional I2C port override\"},"
             "\"scl_hz\":{\"type\":\"integer\",\"description\":\"Optional I2C clock speed in Hz, defaults to 100000\"},"
-            "\"address\":{\"type\":\"integer\",\"description\":\"Optional AHT10 I2C address, normally 0x38\"}},"
+            "\"address\":{\"type\":\"integer\",\"description\":\"Optional AHT10 I2C address, normally 0x38\"},"
+            "\"local\":{\"type\":\"boolean\",\"description\":\"Set true only when explicitly testing this board's local AHT10/AHT20 sensor instead of routing through sensor_agent\"}},"
             "\"required\":[]}",
-        .execute = tool_aht10_read_temperature_humidity_execute,
+        .execute = tool_read_temperature_humidity_execute,
+    });
+
+    register_tool(&(espagent_tool_t){
+        .name = "mesh_send_command",
+        .description = "Publish a standard MQTT Mesh command to another ESPAgent node or role. Use this when the coordinator should route a user request to another ESP32. For ordinary temperature/humidity requests such as '读取温湿度', use action=read_temperature_humidity and target_role=sensor_agent; target_node is optional. This queues the command; remote execution may be dry-run until that role enables command execution.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{\"target_node\":{\"type\":\"string\",\"description\":\"Optional target node id such as esp32s3-sensor-01. Overrides target_role when set.\"},"
+            "\"target_role\":{\"type\":\"string\",\"description\":\"Optional target role such as sensor_agent or control_agent\"},"
+            "\"action\":{\"type\":\"string\",\"description\":\"Command action such as read_temperature_humidity\"},"
+            "\"args\":{\"type\":\"object\",\"description\":\"Optional JSON arguments for the command\"},"
+            "\"args_json\":{\"type\":\"string\",\"description\":\"Optional raw JSON object string for arguments\"},"
+            "\"command_id\":{\"type\":\"string\",\"description\":\"Optional command id. Auto-generated when omitted.\"},"
+            "\"ttl_ms\":{\"type\":\"integer\",\"description\":\"Command time-to-live in milliseconds, defaults to 30000\"},"
+            "\"safety_level\":{\"type\":\"integer\",\"description\":\"Safety level hint, defaults to 1\"},"
+            "\"require_ack\":{\"type\":\"boolean\",\"description\":\"Whether the remote node should acknowledge, defaults to true\"}},"
+            "\"required\":[\"action\"]}",
+        .execute = tool_mesh_send_command_execute,
     });
 
     register_tool(&(espagent_tool_t){
@@ -206,13 +366,14 @@ esp_err_t tool_registry_init(void)
 
     register_tool(&(espagent_tool_t){
         .name = "gpio_write",
-        .description = "Set an ESP32 GPIO output pin high or low. Use this for relays, digital outputs, or simple LEDs.",
+        .description = "Set an ESP32 GPIO output pin high or low. Use this for relays, digital outputs, or simple LEDs. On a coordinator_agent, this defaults to the remote control_agent unless local=true is explicitly provided.",
         .input_schema_json =
             "{\"type\":\"object\","
             "\"properties\":{\"pin\":{\"type\":\"integer\",\"description\":\"ESP32 GPIO number to drive as output\"},"
-            "\"state\":{\"type\":\"integer\",\"description\":\"0 for LOW, 1 for HIGH\"}},"
+            "\"state\":{\"type\":\"integer\",\"description\":\"0 for LOW, 1 for HIGH\"},"
+            "\"local\":{\"type\":\"boolean\",\"description\":\"Set true only when explicitly controlling this coordinator board locally\"}},"
             "\"required\":[\"pin\",\"state\"]}",
-        .execute = tool_gpio_write_execute,
+        .execute = tool_gpio_write_routed_execute,
     });
 
     register_tool(&(espagent_tool_t){
@@ -235,21 +396,22 @@ esp_err_t tool_registry_init(void)
 
     register_tool(&(espagent_tool_t){
         .name = "ws2812_set",
-        .description = "Set a single WS2812/NeoPixel RGB LED color. Useful for the onboard RGB LED on ESP32-S3 boards. Defaults to the configured onboard WS2812 pin, typically GPIO48.",
+        .description = "Set a single WS2812/NeoPixel RGB LED color. Useful for the onboard RGB LED on ESP32-S3 boards. On a coordinator_agent, this defaults to the remote control_agent unless local=true is explicitly provided.",
         .input_schema_json =
             "{\"type\":\"object\","
             "\"properties\":{\"r\":{\"type\":\"integer\",\"description\":\"Red value 0-255\"},"
             "\"g\":{\"type\":\"integer\",\"description\":\"Green value 0-255\"},"
             "\"b\":{\"type\":\"integer\",\"description\":\"Blue value 0-255\"},"
             "\"brightness\":{\"type\":\"integer\",\"description\":\"Optional brightness 0-255, defaults to 255\"},"
-            "\"pin\":{\"type\":\"integer\",\"description\":\"Optional GPIO override. Defaults to the configured onboard WS2812 pin.\"}},"
+            "\"pin\":{\"type\":\"integer\",\"description\":\"Optional GPIO override. Defaults to the configured onboard WS2812 pin.\"},"
+            "\"local\":{\"type\":\"boolean\",\"description\":\"Set true only when explicitly controlling this coordinator board locally\"}},"
             "\"required\":[\"r\",\"g\",\"b\"]}",
-        .execute = tool_ws2812_set_execute,
+        .execute = tool_ws2812_set_routed_execute,
     });
 
     register_tool(&(espagent_tool_t){
         .name = "set_status_light",
-        .description = "Set the onboard RGB status light with a natural-language-friendly color. Prefer this when the user asks to turn the board light red, green, blue, white, yellow, purple, cyan, orange, or off.",
+        .description = "Set the onboard RGB status light with a natural-language-friendly color. Prefer this when the user asks to turn the board light red, green, blue, white, yellow, purple, cyan, orange, or off. On a coordinator_agent, this defaults to the remote control_agent unless local=true is explicitly provided.",
         .input_schema_json =
             "{\"type\":\"object\","
             "\"properties\":{\"color\":{\"type\":\"string\",\"description\":\"Named color such as red, green, blue, white, yellow, orange, purple, cyan, or off\"},"
@@ -257,21 +419,23 @@ esp_err_t tool_registry_init(void)
             "\"pin\":{\"type\":\"integer\",\"description\":\"Optional GPIO override. Defaults to the configured onboard WS2812 pin.\"},"
             "\"r\":{\"type\":\"integer\",\"description\":\"Optional red value 0-255 when using explicit RGB\"},"
             "\"g\":{\"type\":\"integer\",\"description\":\"Optional green value 0-255 when using explicit RGB\"},"
-            "\"b\":{\"type\":\"integer\",\"description\":\"Optional blue value 0-255 when using explicit RGB\"}},"
+            "\"b\":{\"type\":\"integer\",\"description\":\"Optional blue value 0-255 when using explicit RGB\"},"
+            "\"local\":{\"type\":\"boolean\",\"description\":\"Set true only when explicitly controlling this coordinator board locally\"}},"
             "\"required\":[]}",
-        .execute = tool_set_status_light_execute,
+        .execute = tool_set_status_light_routed_execute,
     });
 
     register_tool(&(espagent_tool_t){
         .name = "servo_write",
-        .description = "Control the servo motor on GPIO5. Set the angle in degrees (0-180) or pulse width in microseconds. For requests like opening, starting, or testing the servo without a specific angle, prefer angle=90 to produce a visible motion. GPIO5 is the only pin supported.",
+        .description = "Control the servo motor on GPIO5. Set the angle in degrees (0-180) or pulse width in microseconds. For requests like opening, starting, or testing the servo without a specific angle, prefer angle=90 to produce a visible motion. On a coordinator_agent, this defaults to the remote control_agent unless local=true is explicitly provided.",
         .input_schema_json =
             "{\"type\":\"object\","
             "\"properties\":{"
             "\"angle\":{\"type\":\"integer\",\"description\":\"Target angle 0-180 degrees\"},"
-            "\"pulse_us\":{\"type\":\"integer\",\"description\":\"Pulse width in microseconds (typically 500-2500 for standard servos)\"}},"
+            "\"pulse_us\":{\"type\":\"integer\",\"description\":\"Pulse width in microseconds (typically 500-2500 for standard servos)\"},"
+            "\"local\":{\"type\":\"boolean\",\"description\":\"Set true only when explicitly controlling this coordinator board locally\"}},"
             "\"required\":[]}",
-        .execute = tool_servo_write_execute,
+        .execute = tool_servo_write_routed_execute,
     });
 
     register_tool(&(espagent_tool_t){

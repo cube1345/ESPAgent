@@ -21,6 +21,58 @@ static const char *TAG = "agent";
 
 #define TOOL_OUTPUT_SIZE (8 * 1024)
 
+static size_t utf8_expected_len(unsigned char c) {
+  if (c < 0x80) {
+    return 1;
+  }
+  if ((c & 0xE0) == 0xC0) {
+    return 2;
+  }
+  if ((c & 0xF0) == 0xE0) {
+    return 3;
+  }
+  if ((c & 0xF8) == 0xF0) {
+    return 4;
+  }
+  return 0;
+}
+
+static size_t utf8_safe_prefix_len(const char *buf, size_t len) {
+  size_t i = 0;
+  size_t last_good = 0;
+
+  while (i < len) {
+    unsigned char c = (unsigned char)buf[i];
+    size_t need = utf8_expected_len(c);
+    if (need == 0 || i + need > len) {
+      break;
+    }
+
+    bool valid = true;
+    for (size_t j = 1; j < need; j++) {
+      unsigned char cc = (unsigned char)buf[i + j];
+      if ((cc & 0xC0) != 0x80) {
+        valid = false;
+        break;
+      }
+    }
+    if (!valid) {
+      break;
+    }
+
+    i += need;
+    last_good = i;
+  }
+
+  return last_good;
+}
+
+static size_t terminate_at_utf8_boundary(char *buf, size_t len) {
+  size_t safe = utf8_safe_prefix_len(buf, len);
+  buf[safe] = '\0';
+  return safe;
+}
+
 static bool text_is_proactive_no_message(const char *text) {
   if (!text) {
     return false;
@@ -397,7 +449,7 @@ static void append_turn_context_prompt(char *prompt, size_t size,
                    msg->chat_id[0] ? msg->chat_id : "(empty)");
 
   if (n < 0 || (size_t)n >= (size - off)) {
-    prompt[size - 1] = '\0';
+    terminate_at_utf8_boundary(prompt, size - 1);
   }
 }
 
@@ -419,8 +471,7 @@ static size_t append_prompt_format(char *prompt, size_t size, const char *fmt,
   va_end(ap);
 
   if (n < 0 || (size_t)n >= size - off) {
-    prompt[size - 1] = '\0';
-    return size - 1;
+    return terminate_at_utf8_boundary(prompt, size - 1);
   }
   return off + (size_t)n;
 }

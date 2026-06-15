@@ -153,6 +153,10 @@ esp_err_t wifi_manager_start(void)
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
+    esp_err_t ps_err = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (ps_err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to disable WiFi power save: %s", esp_err_to_name(ps_err));
+    }
     ESP_ERROR_CHECK(esp_wifi_start());
 
     return ESP_OK;
