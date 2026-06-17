@@ -121,14 +121,14 @@ MQTT topics:
 | `espagent/nodes/<node_id>/telemetry` | publish | Sensor telemetry with node metadata when the role has sensor capability |
 | `espagent/nodes/<node_id>/events` | publish | MQTT lifecycle events, Feishu bridge events, and command result events |
 | `espagent/nodes/<node_id>/command` | subscribe | Validates node-targeted Mesh commands through `mesh_protocol`; execution is role-limited |
-| `espagent/roles/<role>/command` | subscribe | Validates role-targeted Mesh commands for coordinator/sensor/control/display groups |
+| `espagent/roles/<role>/command` | subscribe | Validates role-targeted Mesh commands for coordinator/sensor/control/guardian groups |
 | `espagent/agent/dispatch` | subscribe/publish | Coordinator publishes Feishu inbound dispatch events; nodes can observe dispatch messages |
 | `espagent/alerts` | subscribe | Logs alert messages |
-| `espagent/agent/timeline` | publish/subscribe | Receives Feishu inbound/outbound timeline events and sensor `mesh_command_result` events |
+| `espagent/agent/timeline` | publish/subscribe | Receives Feishu inbound/outbound timeline events, ReAct tool events, structured OutputMessages, and Guardian audit inputs |
 
-This is intentionally not a full distributed multi-agent runtime yet. Feishu, WebSocket, cron, proactive checks, and future injected messages still converge on the same message bus and the same serial `agent_loop`. `mesh_send_command` can publish a standard MQTT Mesh command from the Coordinator to a target node or role. Sensor role currently supports the whitelisted `read_temperature_humidity` command and publishes `mesh_command_result`; control-role hardware execution remains disabled until command queue, authorization, safety interlock, audit, and result correlation are implemented.
+This is intentionally not a full distributed multi-agent runtime yet. Feishu, WebSocket, cron, proactive checks, and future injected messages still converge on the same message bus and the same serial `agent_loop`. `mesh_send_command` now publishes `espagent.policy_check.v1` before the real Mesh command, waits for Guardian's `espagent.policy_decision.v1`, and only continues when `decision=allow`; then it waits for a matching structured `espagent.output.v1` OutputMessage when `require_ack=true`. Sensor role currently supports the whitelisted `read_temperature_humidity` command; Control role supports low/medium-risk whitelisted actuator commands. Guardian also observes timeline events and publishes `espagent.guardian.audit.v1` audit records.
 
-For four ESP32-S3 boards, use the same firmware and assign different node profiles in `espagent_secrets.h`: `coordinator_agent`, `sensor_agent`, `control_agent`, and `display_agent`. See `docs/ESP32_ROLE_PROFILES.md`.
+For four ESP32-S3 boards, use the same firmware and assign different node profiles in `espagent_secrets.h`: `coordinator_agent`, `sensor_agent`, `control_agent`, and `guardian_agent`. ESP32-P4/Android carry the display-terminal role. See `docs/ESP32_ROLE_PROFILES.md`.
 
 ---
 
@@ -232,7 +232,7 @@ main/
 │
 ├── roles/
 │   ├── role_config.h       Role/capability service-gating API
-│   ├── role_config.c       Coordinator/sensor/control/display runtime policy
+│   ├── role_config.c       Coordinator/sensor/control/guardian/display runtime policy
 │   ├── coordinator_node.c  Coordinator role boundary
 │   ├── sensor_node.c       Sensor role boundary
 │   ├── control_node.c      Control role boundary
@@ -253,7 +253,7 @@ main/
 │
 └── ota/
     ├── ota_manager.h       OTA update API
-    └── ota_manager.c       esp_https_ota wrapper
+    └── ota_manager.c       HTTPS-only esp_https_ota wrapper + partition info
 ```
 
 ---
@@ -309,6 +309,16 @@ Offset      Size      Name        Purpose
 ```
 
 Total: 16 MB flash.
+
+Current OTA behavior:
+
+- `main/ota/ota_manager.c` uses ESP-IDF `esp_https_ota` with the bundled root CA store.
+- `ota_update` rejects empty URLs and non-HTTPS URLs.
+- The target URL must be an app image such as `ESPAgent.bin`, not a full flash image.
+- The current trigger surface is Serial CLI only: `ota_info` and `ota_update <HTTPS_BIN_URL>`.
+- The Agent does not write firmware source code or compile firmware on the MCU. OTA is an operations path: a developer or CI prepares `ESPAgent.bin`, then the device downloads and installs it.
+- Future Agent-driven OTA should be treated as orchestration only: version discovery, role matching, Guardian approval, human confirmation, command dispatch, reboot observation, and health reporting.
+- Four S3 roles currently use the same firmware image with build-time profile in `espagent_secrets.h`; OTAing a generic image can change that role profile unless the uploaded `.bin` was built for the intended role. A future improvement is to move role identity to NVS so one app image can update all roles safely.
 
 ---
 
@@ -542,8 +552,36 @@ The CLI provides debug and maintenance commands only. All configuration is done 
 | `session_list`                 | List all session files               |
 | `session_clear <CHAT_ID>`      | Delete a session file                |
 | `heap_info`                    | Show internal + PSRAM free bytes     |
+| `ota_info`                     | Show running, boot, and next OTA partitions |
+| `ota_update <HTTPS_BIN_URL>`   | Download HTTPS app `.bin`, write inactive OTA slot, reboot on success |
 | `restart`                      | Reboot the device                    |
 | `help`                         | List all available commands           |
+
+OTA is currently a local maintenance capability only. It is not registered as an LLM tool and should not be exposed through Feishu until it is gated by Guardian policy, explicit human confirmation, image provenance checks, and role/profile handling.
+
+The intended higher-level OTA flow is:
+
+```text
+developer/CI builds ESPAgent.bin
+        |
+        v
+publish firmware + manifest
+        |
+        v
+Coordinator compares node versions and roles
+        |
+        v
+Guardian checks source, role, version, and risk
+        |
+        v
+user confirms
+        |
+        v
+target ESP32 downloads and applies OTA
+        |
+        v
+node reboots, reports version and health
+```
 
 ---
 

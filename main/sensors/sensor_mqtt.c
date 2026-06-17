@@ -15,6 +15,7 @@
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lwip/inet.h"
 #include "lwip/netdb.h"
@@ -39,15 +40,41 @@ static const char *TAG = "sensor_mqtt";
 #define MQTT_PUB_TOPIC_SIZE    160
 #define MQTT_PUB_PAYLOAD_SIZE   768
 #define MQTT_PUB_QUEUE_DEPTH    8
+#define MQTT_OUTPUT_CACHE_DEPTH 8
+#define MQTT_OUTPUT_JSON_SIZE   768
+#define MQTT_POLICY_CACHE_DEPTH 8
+#define MQTT_POLICY_JSON_SIZE   512
 
 typedef struct {
     char topic[MQTT_PUB_TOPIC_SIZE];
     char payload[MQTT_PUB_PAYLOAD_SIZE];
 } mqtt_pub_item_t;
 
+typedef struct {
+    bool used;
+    int64_t ts_ms;
+    char command_id[ESPAGENT_MESH_ID_MAX];
+    char output_json[MQTT_OUTPUT_JSON_SIZE];
+} output_cache_item_t;
+
+typedef struct {
+    bool used;
+    int64_t ts_ms;
+    char command_id[ESPAGENT_MESH_ID_MAX];
+    char decision_json[MQTT_POLICY_JSON_SIZE];
+} policy_cache_item_t;
+
 static portMUX_TYPE s_dht22_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool s_mhz19_uart_ready = false;
 static QueueHandle_t s_pub_queue = NULL;
+static SemaphoreHandle_t s_output_mutex = NULL;
+static SemaphoreHandle_t s_policy_mutex = NULL;
+static output_cache_item_t s_output_cache[MQTT_OUTPUT_CACHE_DEPTH];
+static policy_cache_item_t s_policy_cache[MQTT_POLICY_CACHE_DEPTH];
+static uint32_t s_output_cache_next = 0;
+static uint32_t s_policy_cache_next = 0;
+
+static void json_add_optional_string(cJSON *root, const char *key, const char *value);
 
 static int wait_level_timeout(int pin, int level, int timeout_us)
 {
@@ -404,6 +431,303 @@ esp_err_t sensor_mqtt_publish_text(const char *topic, const char *payload)
     return mqtt_queue_publish(topic, payload);
 }
 
+static esp_err_t output_cache_ensure(void)
+{
+    if (!s_output_mutex) {
+        s_output_mutex = xSemaphoreCreateMutex();
+        if (!s_output_mutex) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return ESP_OK;
+}
+
+static esp_err_t policy_cache_ensure(void)
+{
+    if (!s_policy_mutex) {
+        s_policy_mutex = xSemaphoreCreateMutex();
+        if (!s_policy_mutex) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return ESP_OK;
+}
+
+static bool json_field_equals(cJSON *root, const char *key, const char *value)
+{
+    cJSON *item = cJSON_GetObjectItem(root, key);
+    return cJSON_IsString(item) && strcmp(item->valuestring, value) == 0;
+}
+
+static bool output_payload_is_result(cJSON *root)
+{
+    return json_field_equals(root, "schema", "espagent.output.v1") ||
+           json_field_equals(root, "type", "output") ||
+           json_field_equals(root, "event", "mesh_command_result");
+}
+
+static bool policy_payload_is_decision(cJSON *root)
+{
+    return json_field_equals(root, "schema", "espagent.policy_decision.v1") ||
+           json_field_equals(root, "event", "policy_decision");
+}
+
+static const char *json_optional_string(cJSON *root, const char *key)
+{
+    cJSON *item = cJSON_GetObjectItem(root, key);
+    return cJSON_IsString(item) ? item->valuestring : "";
+}
+
+static int json_optional_int(cJSON *root, const char *key, int default_value)
+{
+    cJSON *item = cJSON_GetObjectItem(root, key);
+    return cJSON_IsNumber(item) ? item->valueint : default_value;
+}
+
+static bool guardian_should_audit_event(cJSON *root)
+{
+    const char *event = json_optional_string(root, "event");
+    const char *type = json_optional_string(root, "type");
+
+    return output_payload_is_result(root) ||
+           strcmp(event, "tool_use") == 0 ||
+           strcmp(event, "tool_result") == 0 ||
+           strcmp(event, "mesh_command_queued") == 0 ||
+           strcmp(event, "final_reply") == 0 ||
+           strcmp(event, "error") == 0 ||
+           strcmp(type, "output") == 0;
+}
+
+static void guardian_audit_timeline_payload(const char *payload, size_t payload_len)
+{
+    if (!espagent_role_is_guardian() || !payload || payload_len == 0) {
+        return;
+    }
+
+    cJSON *observed = cJSON_ParseWithLength(payload, payload_len);
+    if (!observed || !cJSON_IsObject(observed)) {
+        cJSON_Delete(observed);
+        return;
+    }
+    if (!guardian_should_audit_event(observed)) {
+        cJSON_Delete(observed);
+        return;
+    }
+
+    const char *status = json_optional_string(observed, "status");
+    const bool is_error = strcmp(status, "error") == 0 ||
+                          json_field_equals(observed, "type", "error");
+
+    cJSON *audit = cJSON_CreateObject();
+    if (!audit) {
+        cJSON_Delete(observed);
+        return;
+    }
+
+    int64_t ts_ms = esp_timer_get_time() / 1000;
+    char audit_id[96] = {0};
+    snprintf(audit_id, sizeof(audit_id), "audit-%s-%lld",
+             espagent_node_id(), (long long)ts_ms);
+
+    cJSON_AddStringToObject(audit, "schema", "espagent.guardian.audit.v1");
+    cJSON_AddStringToObject(audit, "audit_id", audit_id);
+    cJSON_AddStringToObject(audit, "event", "guardian_audit");
+    cJSON_AddStringToObject(audit, "auditor_node", espagent_node_id());
+    cJSON_AddStringToObject(audit, "auditor_role", espagent_node_role());
+    cJSON_AddStringToObject(audit, "decision", is_error ? "watch" : "observe");
+    cJSON_AddStringToObject(audit, "privacy_mode", "metadata_only");
+    cJSON_AddStringToObject(audit, "observed_event", json_optional_string(observed, "event"));
+    cJSON_AddStringToObject(audit, "observed_type", json_optional_string(observed, "type"));
+    cJSON_AddStringToObject(audit, "observed_status", status);
+    cJSON_AddStringToObject(audit, "observed_node", json_optional_string(observed, "node_id"));
+    cJSON_AddStringToObject(audit, "observed_role", json_optional_string(observed, "role"));
+    json_add_optional_string(audit, "command_id", json_optional_string(observed, "command_id"));
+    json_add_optional_string(audit, "trace_id", json_optional_string(observed, "trace_id"));
+    json_add_optional_string(audit, "action", json_optional_string(observed, "action"));
+    cJSON_AddStringToObject(audit, "summary", is_error ? "Guardian observed an error event" : "Guardian observed a mesh event");
+    cJSON_AddNumberToObject(audit, "ts_ms", (double)ts_ms);
+
+    char *json = cJSON_PrintUnformatted(audit);
+    cJSON_Delete(audit);
+    cJSON_Delete(observed);
+    if (!json) {
+        return;
+    }
+
+    (void)mqtt_queue_publish(ESPAGENT_SENSOR_MQTT_TOPIC_EVENTS, json);
+    if (is_error) {
+        (void)mqtt_queue_publish(ESPAGENT_MESH_TOPIC_ALERTS, json);
+    }
+    ESP_LOGI(TAG, "Guardian audited timeline event: %s", json);
+    cJSON_free(json);
+}
+
+static void output_cache_store_json(cJSON *root)
+{
+    if (!root || output_cache_ensure() != ESP_OK) {
+        return;
+    }
+
+    cJSON *cmd = cJSON_GetObjectItem(root, "command_id");
+    if (!cJSON_IsString(cmd) || cmd->valuestring[0] == '\0') {
+        return;
+    }
+
+    char *json = cJSON_PrintUnformatted(root);
+    if (!json) {
+        return;
+    }
+
+    if (xSemaphoreTake(s_output_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        output_cache_item_t *slot = &s_output_cache[s_output_cache_next % MQTT_OUTPUT_CACHE_DEPTH];
+        memset(slot, 0, sizeof(*slot));
+        slot->used = true;
+        slot->ts_ms = esp_timer_get_time() / 1000;
+        snprintf(slot->command_id, sizeof(slot->command_id), "%s", cmd->valuestring);
+        snprintf(slot->output_json, sizeof(slot->output_json), "%s", json);
+        s_output_cache_next++;
+        xSemaphoreGive(s_output_mutex);
+        ESP_LOGI(TAG, "Cached OutputMessage command_id=%s", cmd->valuestring);
+    }
+
+    cJSON_free(json);
+}
+
+static void output_cache_maybe_store_payload(const char *payload, size_t payload_len)
+{
+    if (!payload || payload_len == 0) {
+        return;
+    }
+
+    cJSON *root = cJSON_ParseWithLength(payload, payload_len);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root) {
+            cJSON_Delete(root);
+        }
+        return;
+    }
+
+    if (output_payload_is_result(root)) {
+        output_cache_store_json(root);
+    }
+
+    cJSON_Delete(root);
+}
+
+static void policy_cache_store_json(cJSON *root)
+{
+    if (!root || policy_cache_ensure() != ESP_OK) {
+        return;
+    }
+
+    cJSON *cmd = cJSON_GetObjectItem(root, "command_id");
+    if (!cJSON_IsString(cmd) || cmd->valuestring[0] == '\0') {
+        return;
+    }
+
+    char *json = cJSON_PrintUnformatted(root);
+    if (!json) {
+        return;
+    }
+
+    if (xSemaphoreTake(s_policy_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        policy_cache_item_t *slot = &s_policy_cache[s_policy_cache_next % MQTT_POLICY_CACHE_DEPTH];
+        memset(slot, 0, sizeof(*slot));
+        slot->used = true;
+        slot->ts_ms = esp_timer_get_time() / 1000;
+        snprintf(slot->command_id, sizeof(slot->command_id), "%s", cmd->valuestring);
+        snprintf(slot->decision_json, sizeof(slot->decision_json), "%s", json);
+        s_policy_cache_next++;
+        xSemaphoreGive(s_policy_mutex);
+        ESP_LOGI(TAG, "Cached PolicyDecision command_id=%s", cmd->valuestring);
+    }
+
+    cJSON_free(json);
+}
+
+static void policy_cache_maybe_store_payload(const char *payload, size_t payload_len)
+{
+    if (!payload || payload_len == 0) {
+        return;
+    }
+
+    cJSON *root = cJSON_ParseWithLength(payload, payload_len);
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    if (policy_payload_is_decision(root)) {
+        policy_cache_store_json(root);
+    }
+
+    cJSON_Delete(root);
+}
+
+esp_err_t sensor_mqtt_wait_output_message(const char *command_id,
+                                          char *output_json,
+                                          size_t output_json_size,
+                                          uint32_t timeout_ms)
+{
+    if (!command_id || command_id[0] == '\0' || !output_json || output_json_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (output_cache_ensure() != ESP_OK) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    const int64_t start_ms = esp_timer_get_time() / 1000;
+    const int64_t deadline_ms = start_ms + timeout_ms;
+    while ((esp_timer_get_time() / 1000) <= deadline_ms) {
+        if (xSemaphoreTake(s_output_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            for (size_t i = 0; i < MQTT_OUTPUT_CACHE_DEPTH; i++) {
+                const output_cache_item_t *item = &s_output_cache[i];
+                if (item->used && strcmp(item->command_id, command_id) == 0) {
+                    snprintf(output_json, output_json_size, "%s", item->output_json);
+                    xSemaphoreGive(s_output_mutex);
+                    return ESP_OK;
+                }
+            }
+            xSemaphoreGive(s_output_mutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    return ESP_ERR_TIMEOUT;
+}
+
+esp_err_t sensor_mqtt_wait_policy_decision(const char *command_id,
+                                           char *decision_json,
+                                           size_t decision_json_size,
+                                           uint32_t timeout_ms)
+{
+    if (!command_id || command_id[0] == '\0' || !decision_json || decision_json_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (policy_cache_ensure() != ESP_OK) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    const int64_t start_ms = esp_timer_get_time() / 1000;
+    const int64_t deadline_ms = start_ms + timeout_ms;
+    while ((esp_timer_get_time() / 1000) <= deadline_ms) {
+        if (xSemaphoreTake(s_policy_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            for (size_t i = 0; i < MQTT_POLICY_CACHE_DEPTH; i++) {
+                const policy_cache_item_t *item = &s_policy_cache[i];
+                if (item->used && strcmp(item->command_id, command_id) == 0) {
+                    snprintf(decision_json, decision_json_size, "%s", item->decision_json);
+                    xSemaphoreGive(s_policy_mutex);
+                    return ESP_OK;
+                }
+            }
+            xSemaphoreGive(s_policy_mutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    return ESP_ERR_TIMEOUT;
+}
+
 esp_err_t sensor_mqtt_publish_node_event(const char *event_type, const char *detail)
 {
     char json[512];
@@ -465,6 +789,130 @@ esp_err_t sensor_mqtt_publish_timeline_event(const char *phase,
     return err;
 }
 
+static bool policy_is_sensor_action(const char *action)
+{
+    return action && strcmp(action, "read_temperature_humidity") == 0;
+}
+
+static bool policy_is_control_action(const char *action)
+{
+    return action &&
+           (strcmp(action, "set_status_light") == 0 ||
+            strcmp(action, "ws2812_set") == 0 ||
+            strcmp(action, "servo_write") == 0 ||
+            strcmp(action, "gpio_write") == 0);
+}
+
+static void handle_guardian_policy_check(const char *payload, size_t payload_len)
+{
+    if (!espagent_role_is_guardian() || !payload || payload_len == 0) {
+        return;
+    }
+
+    cJSON *root = cJSON_ParseWithLength(payload, payload_len);
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        ESP_LOGW(TAG, "Guardian rejected malformed policy_check: %.*s", (int)payload_len, payload);
+        return;
+    }
+
+    const char *command_id = json_optional_string(root, "command_id");
+    const char *trace_id = json_optional_string(root, "trace_id");
+    const char *action = json_optional_string(root, "action");
+    const char *target_role = json_optional_string(root, "target_role");
+    const char *target_node = json_optional_string(root, "target_node");
+    int safety_level = json_optional_int(root, "safety_level", ESPAGENT_MESH_SAFETY_MEDIUM);
+
+    char command_id_copy[ESPAGENT_MESH_ID_MAX] = {0};
+    char trace_id_copy[ESPAGENT_MESH_TRACE_MAX] = {0};
+    char action_copy[ESPAGENT_MESH_ACTION_MAX] = {0};
+    char target_role_copy[ESPAGENT_MESH_ROLE_MAX] = {0};
+    char target_node_copy[ESPAGENT_MESH_NODE_MAX] = {0};
+    snprintf(command_id_copy, sizeof(command_id_copy), "%s", command_id);
+    snprintf(trace_id_copy, sizeof(trace_id_copy), "%s", trace_id);
+    snprintf(action_copy, sizeof(action_copy), "%s", action);
+    snprintf(target_role_copy, sizeof(target_role_copy), "%s", target_role);
+    snprintf(target_node_copy, sizeof(target_node_copy), "%s", target_node);
+
+    const char *decision = "deny";
+    const char *reason = "deny by default";
+    bool allowed = false;
+
+    if (command_id_copy[0] == '\0') {
+        reason = "missing command_id";
+    } else if (action_copy[0] == '\0') {
+        reason = "missing action";
+    } else if (safety_level > ESPAGENT_MESH_SAFETY_MEDIUM) {
+        reason = "safety_level requires human confirmation";
+    } else if (policy_is_sensor_action(action_copy)) {
+        if (strcmp(target_role_copy, ESPAGENT_ROLE_SENSOR) == 0) {
+            decision = "allow";
+            reason = "allowed low-risk sensor read";
+            allowed = true;
+        } else {
+            reason = "sensor action must target sensor_agent";
+        }
+    } else if (policy_is_control_action(action_copy)) {
+        if (strcmp(target_role_copy, ESPAGENT_ROLE_CONTROL) == 0) {
+            decision = "allow";
+            reason = "allowed whitelisted low/medium-risk control action";
+            allowed = true;
+        } else {
+            reason = "control action must target control_agent";
+        }
+    } else {
+        reason = "unsupported action";
+    }
+
+    cJSON *out = cJSON_CreateObject();
+    if (!out) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    int64_t ts_ms = esp_timer_get_time() / 1000;
+    char decision_id[96] = {0};
+    snprintf(decision_id, sizeof(decision_id), "decision-%s-%lld",
+             command_id_copy[0] ? command_id_copy : "none",
+             (long long)ts_ms);
+
+    cJSON_AddStringToObject(out, "schema", "espagent.policy_decision.v1");
+    cJSON_AddStringToObject(out, "event", "policy_decision");
+    cJSON_AddStringToObject(out, "decision_id", decision_id);
+    cJSON_AddStringToObject(out, "guardian_node", espagent_node_id());
+    cJSON_AddStringToObject(out, "guardian_role", espagent_node_role());
+    cJSON_AddStringToObject(out, "command_id", command_id_copy);
+    cJSON_AddStringToObject(out, "trace_id", trace_id_copy);
+    cJSON_AddStringToObject(out, "action", action_copy);
+    cJSON_AddStringToObject(out, "target_role", target_role_copy);
+    cJSON_AddStringToObject(out, "target_node", target_node_copy);
+    cJSON_AddStringToObject(out, "decision", decision);
+    cJSON_AddBoolToObject(out, "allowed", allowed);
+    cJSON_AddStringToObject(out, "reason", reason);
+    cJSON_AddNumberToObject(out, "safety_level", safety_level);
+    cJSON_AddNumberToObject(out, "ts_ms", (double)ts_ms);
+
+    char *json = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    cJSON_Delete(root);
+    if (!json) {
+        return;
+    }
+
+    (void)mqtt_queue_publish(ESPAGENT_MESH_TOPIC_POLICY_DECISION, json);
+    (void)mqtt_queue_publish(ESPAGENT_SENSOR_MQTT_TOPIC_EVENTS, json);
+    (void)sensor_mqtt_publish_timeline_event("policy",
+                                             "policy_decision",
+                                             allowed ? "ok" : "blocked",
+                                             reason,
+                                             command_id_copy,
+                                             target_role_copy,
+                                             target_node_copy,
+                                             action_copy);
+    ESP_LOGI(TAG, "Guardian policy decision: %s", json);
+    cJSON_free(json);
+}
+
 static void publish_mesh_command_result(const espagent_mesh_command_t *cmd,
                                         esp_err_t result_err,
                                         const char *result)
@@ -475,17 +923,44 @@ static void publish_mesh_command_result(const espagent_mesh_command_t *cmd,
     }
 
     int64_t ts_ms = esp_timer_get_time() / 1000;
+    char msg_id[96] = {0};
+    snprintf(msg_id, sizeof(msg_id), "out-%s-%lld",
+             cmd->command_id[0] ? cmd->command_id : "none",
+             (long long)ts_ms);
+    cJSON_AddStringToObject(root, "schema", "espagent.output.v1");
+    cJSON_AddStringToObject(root, "msg_id", msg_id);
     cJSON_AddStringToObject(root, "node_id", espagent_node_id());
     cJSON_AddStringToObject(root, "role", espagent_node_role());
+    cJSON_AddStringToObject(root, "sender", espagent_node_role());
+    cJSON_AddStringToObject(root, "sender_node", espagent_node_id());
+    cJSON_AddStringToObject(root, "recipient", "coordinator_agent");
     cJSON_AddStringToObject(root, "location", espagent_node_location());
-    cJSON_AddStringToObject(root, "type", "event");
+    cJSON_AddStringToObject(root, "type", "output");
     cJSON_AddStringToObject(root, "event", "mesh_command_result");
     cJSON_AddStringToObject(root, "command_id", cmd->command_id);
+    cJSON_AddStringToObject(root, "trace_id", cmd->trace_id);
     cJSON_AddStringToObject(root, "action", cmd->action);
     cJSON_AddStringToObject(root, "status", result_err == ESP_OK ? "ok" : "error");
     cJSON_AddStringToObject(root, "esp_err", esp_err_to_name(result_err));
-    cJSON_AddStringToObject(root, "result", result ? result : "");
+    cJSON_AddStringToObject(root, "summary", result ? result : "");
+    cJSON *result_obj = cJSON_CreateObject();
+    if (result_obj) {
+        cJSON_AddStringToObject(result_obj, "text", result ? result : "");
+        cJSON_AddItemToObject(root, "result", result_obj);
+    }
+    if (result_err == ESP_OK) {
+        cJSON_AddNullToObject(root, "error");
+    } else {
+        cJSON *err_obj = cJSON_CreateObject();
+        if (err_obj) {
+            cJSON_AddStringToObject(err_obj, "code", esp_err_to_name(result_err));
+            cJSON_AddStringToObject(err_obj, "message", result ? result : "");
+            cJSON_AddItemToObject(root, "error", err_obj);
+        }
+    }
     cJSON_AddNumberToObject(root, "ts_ms", (double)ts_ms);
+
+    output_cache_store_json(root);
 
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -678,6 +1153,16 @@ static void mqtt_poll_inbound(int fd)
                 ESP_LOGI(TAG, "Mesh dispatch received: %.*s", (int)msg_len, msg);
             } else if (mqtt_topic_equals(topic, topic_len, ESPAGENT_MESH_TOPIC_ALERTS)) {
                 ESP_LOGI(TAG, "Mesh alert received: %.*s", (int)msg_len, msg);
+            } else if (mqtt_topic_equals(topic, topic_len, ESPAGENT_MESH_TOPIC_TIMELINE)) {
+                output_cache_maybe_store_payload(msg, msg_len);
+                guardian_audit_timeline_payload(msg, msg_len);
+                ESP_LOGI(TAG, "Mesh timeline received: %.*s", (int)msg_len, msg);
+            } else if (mqtt_topic_equals(topic, topic_len, ESPAGENT_MESH_TOPIC_POLICY_CHECK)) {
+                ESP_LOGI(TAG, "Policy check received: %.*s", (int)msg_len, msg);
+                handle_guardian_policy_check(msg, msg_len);
+            } else if (mqtt_topic_equals(topic, topic_len, ESPAGENT_MESH_TOPIC_POLICY_DECISION)) {
+                policy_cache_maybe_store_payload(msg, msg_len);
+                ESP_LOGI(TAG, "Policy decision received: %.*s", (int)msg_len, msg);
             } else {
                 ESP_LOGI(TAG, "MQTT inbound %.*s: %.*s",
                          (int)topic_len, (const char *)topic,
@@ -779,24 +1264,34 @@ static void sensor_mqtt_task(void *arg)
         mqtt_subscribe(fd, ESPAGENT_MESH_TOPIC_ROLE_COMMAND, 2);
         mqtt_subscribe(fd, ESPAGENT_MESH_TOPIC_DISPATCH, 3);
         mqtt_subscribe(fd, ESPAGENT_MESH_TOPIC_ALERTS, 4);
+        mqtt_subscribe(fd, ESPAGENT_MESH_TOPIC_TIMELINE, 5);
+        mqtt_subscribe(fd, ESPAGENT_MESH_TOPIC_POLICY_CHECK, 6);
+        mqtt_subscribe(fd, ESPAGENT_MESH_TOPIC_POLICY_DECISION, 7);
 
+        int64_t last_periodic_publish_ms = 0;
         while (1) {
             mqtt_poll_inbound(fd);
             mqtt_flush_queued_publishes(fd);
-            if (publish_telemetry) {
-                esp_err_t telemetry_err = publish_sensor_data(fd);
-                if (telemetry_err == ESP_FAIL) {
-                    ESP_LOGW(TAG, "MQTT publish failed, reconnecting");
-                    publish_node_event(fd, "mqtt_reconnect", "telemetry publish failed");
+
+            int64_t now_ms = esp_timer_get_time() / 1000;
+            if (last_periodic_publish_ms == 0 ||
+                now_ms - last_periodic_publish_ms >= ESPAGENT_SENSOR_MQTT_PUBLISH_INTERVAL_MS) {
+                last_periodic_publish_ms = now_ms;
+                if (publish_telemetry) {
+                    esp_err_t telemetry_err = publish_sensor_data(fd);
+                    if (telemetry_err == ESP_FAIL) {
+                        ESP_LOGW(TAG, "MQTT publish failed, reconnecting");
+                        publish_node_event(fd, "mqtt_reconnect", "telemetry publish failed");
+                        close(fd);
+                        break;
+                    }
+                } else if (publish_node_state(fd, "online") != ESP_OK) {
+                    ESP_LOGW(TAG, "MQTT state publish failed, reconnecting");
                     close(fd);
                     break;
                 }
-            } else if (publish_node_state(fd, "online") != ESP_OK) {
-                ESP_LOGW(TAG, "MQTT state publish failed, reconnecting");
-                close(fd);
-                break;
             }
-            vTaskDelay(pdMS_TO_TICKS(ESPAGENT_SENSOR_MQTT_PUBLISH_INTERVAL_MS));
+            vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
 }

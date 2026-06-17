@@ -122,8 +122,8 @@
 
 ### [ ] LingShu Agent Mesh Coordinator
 - **Target**: Expand the current ESP32-S3 Edge Agent Node into a multi-node system with Coordinator Agent, Sensor Agent, Control Agent, Memory Agent, Communication Agent, and Display Agent.
-- **Current**: Phase 1.6 is implemented in firmware: node identity and role profile exist; MQTT publishes state/telemetry/events under `espagent/nodes/<node_id>/...`; node/role command topics are subscribed; `main/mesh` parses and validates command JSON; `main/roles` provides coordinator/sensor/control/display service boundaries; `espagent_app` starts LLM/chat, scheduler, sensor monitors, control outputs, and display boundaries according to role/capability. `mesh_send_command` is registered as an LLM-callable Coordinator tool, and `sensor_agent` can execute the whitelisted `read_temperature_humidity` Mesh command and publish `mesh_command_result`. Runtime skills now include Agent Mesh coordination, MQTT Mesh operations, MCU edge AI capability boundaries, and four-role resource planning.
-- **Recommendation**: Implement Coordinator-side `command_id` result correlation and Feishu summary before enabling broader remote control. Keep control-role hardware execution disabled until command queue, authorization, audit events, safety interlock, and message_bus/tool_guard routing are implemented.
+- **Current**: Phase 1.6 is implemented in firmware: node identity and role profile exist; MQTT publishes state/telemetry/events under `espagent/nodes/<node_id>/...`; node/role command topics are subscribed; `main/mesh` parses and validates command JSON; `main/roles` provides coordinator/sensor/control/guardian service boundaries; `espagent_app` starts LLM/chat, scheduler, sensor monitors, control outputs, and guardian/display boundaries according to role/capability. `mesh_send_command` is registered as an LLM-callable Coordinator tool, `sensor_agent` and `control_agent` can execute their whitelisted Mesh commands, and downstream results are now published as structured `espagent.output.v1` OutputMessage. Runtime skills now include Agent Mesh coordination, MQTT Mesh operations, MCU edge AI capability boundaries, and four-role resource planning.
+- **Recommendation**: Extend the current synchronous policy/OutputMessage waits into async task_id + message_bus/timeline 回注, then make Control locally verify Guardian decisions before enabling broader remote control. Keep high-risk hardware execution disabled until command queue, authorization, audit events, safety interlock, and message_bus/tool_guard routing are implemented.
 
 ### [ ] MCU Edge AI / TinyML Path
 - **Target**: Add optional local inference for small, bounded tasks such as sensor anomaly detection, wake word/command spotting, or low-dimensional classification.
@@ -170,11 +170,11 @@
 - [x] Mesh command publish tool (`mesh_send_command`) for Coordinator-to-node/role MQTT commands
 - [x] Sensor-side whitelisted Mesh command result path for `read_temperature_humidity`
 - [x] Bounded Subagent Tool (`spawn_subagent`) with filtered search/weather/time/file tool access
-- [x] Four-ESP32 role profile configuration (`coordinator_agent`, `sensor_agent`, `control_agent`, `display_agent`)
+- [x] Four-ESP32 role profile configuration (`coordinator_agent`, `sensor_agent`, `control_agent`, `guardian_agent`)
 - [x] WebSocket Gateway (port 18789, JSON protocol)
 - [x] Serial CLI (esp_console, debug/maintenance commands)
 - [x] HTTP CONNECT Proxy (Feishu + LLM API + search APIs via proxy tunnel)
-- [x] OTA Update
+- [x] OTA Update (Serial CLI HTTPS app-bin update; Agent orchestration planned)
 - [x] WiFi Manager (build-time credentials, exponential backoff)
 - [x] SPIFFS storage
 - [x] Build-time config (`espagent_secrets.h`) + runtime NVS override via CLI

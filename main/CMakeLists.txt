@@ -11,6 +11,7 @@ idf_component_register(
         "roles/sensor_node.c"
         "roles/control_node.c"
         "roles/display_node.c"
+        "roles/guardian_node.c"
         "time_sync/time_sync.c"
         "wifi/wifi_manager.c"
         "channels/feishu/feishu_bot.c"
@@ -51,6 +52,7 @@ idf_component_register(
         "drivers/bh1750.c"
         "skills/skill_loader.c"
         "onboard/wifi_onboard.c"
+        "ota/ota_manager.c"
     INCLUDE_DIRS
         "."
     REQUIRES

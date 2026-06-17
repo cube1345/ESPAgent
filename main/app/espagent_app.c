@@ -35,6 +35,7 @@
 #include "roles/control_node.h"
 #include "roles/coordinator_node.h"
 #include "roles/display_node.h"
+#include "roles/guardian_node.h"
 #include "roles/role_config.h"
 #include "roles/sensor_node.h"
 #include "sensors/sensor_mqtt.h"
@@ -342,6 +343,7 @@ esp_err_t espagent_app_init_subsystems(void)
     ESP_RETURN_ON_ERROR(sensor_node_init(), TAG, "sensor_node_init failed");
     ESP_RETURN_ON_ERROR(control_node_init(), TAG, "control_node_init failed");
     ESP_RETURN_ON_ERROR(display_node_init(), TAG, "display_node_init failed");
+    ESP_RETURN_ON_ERROR(guardian_node_init(), TAG, "guardian_node_init failed");
 
     return ESP_OK;
 }
@@ -437,6 +439,7 @@ esp_err_t espagent_app_start_network_services(void)
     ESP_RETURN_ON_ERROR(sensor_node_start(), TAG, "sensor_node_start failed");
     ESP_RETURN_ON_ERROR(control_node_start(), TAG, "control_node_start failed");
     ESP_RETURN_ON_ERROR(display_node_start(), TAG, "display_node_start failed");
+    ESP_RETURN_ON_ERROR(guardian_node_start(), TAG, "guardian_node_start failed");
 
     if (espagent_role_runs_llm()) {
         ESP_RETURN_ON_ERROR(agent_loop_start(), TAG, "agent_loop_start failed");

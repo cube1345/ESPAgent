@@ -51,8 +51,8 @@ Feishu / WebSocket / MQTT timeline / P4 / Android
 
 - ESP32-S3 端仍是一个 `agent_loop` 串行处理 LLM 回合，不是多个 Linux 进程式 Agent。
 - `spawn_subagent` 已实现，是同一 Coordinator MCU 上临时创建的 FreeRTOS 子任务，工具权限受限。
-- MQTT Mesh 已能表达跨节点命令、状态、遥测和 timeline。
-- `development` 分支计划把第四块 ESP32-S3 从 `display_agent` 调整为 `guardian_agent`，负责权限裁决、数据治理、审计、StateBoard 和 Watchdog。
+- MQTT Mesh 已能表达跨节点命令、状态、遥测、timeline 和结构化 OutputMessage。
+- `development` 分支已把第四块 ESP32-S3 推荐角色从 `display_agent` 调整为 `guardian_agent`，负责权限裁决、数据治理、审计、StateBoard 和 Watchdog。当前固件已落地 Guardian 启动边界、观察式 audit，以及 `policy_check -> policy_decision` 同步裁决第一版。
 - Android 端第一阶段做 Display / Debug / Confirm Terminal，不直接替代 Coordinator，不绕过 Guardian 和 Control 的安全边界。
 
 ## 可参考项目
@@ -128,9 +128,11 @@ tool_use                LLM 选择调用工具
 tool_result             工具执行结果
 mesh_command_queued     Coordinator 已将 Mesh 命令入队/发布
 mesh_command_result     下游节点执行结果
+output                  schema=espagent.output.v1 的结构化执行结果
 policy_check            Coordinator 请求 Guardian 裁决
 policy_decision         Guardian 返回 allow/deny/require_confirm/sanitize/limit
-audit_event             Guardian 审计记录
+guardian_audit          schema=espagent.guardian.audit.v1 的 Guardian 审计记录
+audit_event             兼容旧命名的 Guardian 审计记录
 privacy_sanitized       Guardian 输出脱敏后的传感器/隐私摘要
 watchdog_event          Guardian 发现节点离线、命令超时或 telemetry 过期
 confirm_required        需要用户确认
@@ -148,6 +150,29 @@ final_reply             面向用户的最终结果
 - 优先读取 `event_type`、`type`、`name`。
 - 优先读取 `node_id`、`role`、`source`、`target_role`、`target_node`。
 - 优先读取 `command_id`、`trace_id`、`task_id`、`msg_id`，没有则本地生成。
+
+当前 S3 固件的 OutputMessage v1 关键字段：
+
+```json
+{
+  "schema": "espagent.output.v1",
+  "type": "output",
+  "event": "mesh_command_result",
+  "msg_id": "out-...",
+  "node_id": "esp32s3-sensor-01",
+  "role": "sensor_agent",
+  "sender": "sensor_agent",
+  "recipient": "coordinator_agent",
+  "command_id": "cmd-...",
+  "trace_id": "trace-...",
+  "action": "read_temperature_humidity",
+  "status": "ok",
+  "summary": "...",
+  "result": {"text": "..."},
+  "error": null,
+  "ts_ms": 123456
+}
+```
 - 优先读取 `decision`、`risk_level`、`requires_confirm`、`expires_at`、`ttl_ms`。
 - 原始 JSON 必须保留，供调试面板查看。
 

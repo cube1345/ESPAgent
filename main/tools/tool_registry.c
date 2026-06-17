@@ -265,15 +265,16 @@ esp_err_t tool_registry_init(void)
         .input_schema_json =
             "{\"type\":\"object\","
             "\"properties\":{\"target_node\":{\"type\":\"string\",\"description\":\"Optional target node id such as esp32s3-sensor-01. Overrides target_role when set.\"},"
-            "\"target_role\":{\"type\":\"string\",\"description\":\"Optional target role such as sensor_agent or control_agent\"},"
-            "\"action\":{\"type\":\"string\",\"description\":\"Command action such as read_temperature_humidity\"},"
+            "\"target_role\":{\"type\":\"string\",\"enum\":[\"sensor_agent\",\"control_agent\"],\"description\":\"Optional target role. Use sensor_agent for reads and control_agent for actuators.\"},"
+            "\"action\":{\"type\":\"string\",\"enum\":[\"read_temperature_humidity\",\"set_status_light\",\"ws2812_set\",\"servo_write\",\"gpio_write\"],\"description\":\"Whitelisted mesh command action\"},"
             "\"args\":{\"type\":\"object\",\"description\":\"Optional JSON arguments for the command\"},"
             "\"args_json\":{\"type\":\"string\",\"description\":\"Optional raw JSON object string for arguments\"},"
             "\"command_id\":{\"type\":\"string\",\"description\":\"Optional command id. Auto-generated when omitted.\"},"
-            "\"ttl_ms\":{\"type\":\"integer\",\"description\":\"Command time-to-live in milliseconds, defaults to 30000\"},"
-            "\"safety_level\":{\"type\":\"integer\",\"description\":\"Safety level hint, defaults to 1\"},"
+            "\"trace_id\":{\"type\":\"string\",\"description\":\"Optional trace id shared across the user request and downstream OutputMessage\"},"
+            "\"ttl_ms\":{\"type\":\"integer\",\"minimum\":1000,\"maximum\":30000,\"description\":\"Command time-to-live in milliseconds, defaults to 30000\"},"
+            "\"safety_level\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2,\"description\":\"Safety level hint: 0 low, 1 medium, 2 high; defaults to 1\"},"
             "\"require_ack\":{\"type\":\"boolean\",\"description\":\"Whether the remote node should acknowledge, defaults to true\"}},"
-            "\"required\":[\"action\"]}",
+            "\"required\":[\"action\"],\"additionalProperties\":false}",
         .execute = tool_mesh_send_command_execute,
     });
 

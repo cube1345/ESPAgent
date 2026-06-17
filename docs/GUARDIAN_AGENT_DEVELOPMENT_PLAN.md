@@ -266,21 +266,34 @@ espagent/cube1345/guardian/watchdog
 
 ### Phase 1: 角色 profile 和文档
 
+- 状态：已落地。
 - 在 `espagent_secrets.h.example` 增加 `guardian_agent` profile。
 - 在 `role_config` 中增加 guardian role 判定。
-- 保留 `display_agent`，但将 USB3 推荐角色改为 `guardian_agent`。
+- 保留 `display_agent` 兼容旧方案，但将 USB3 推荐角色改为 `guardian_agent`。
 - 更新 `docs/ESP32_ROLE_PROFILES.md` 和 `docs/PUBLIC_KNOWLEDGE_BASE.md`。
 
 ### Phase 2: Guardian 最小运行时
 
-- 新增 `main/roles/guardian_node.c/.h`。
-- Guardian 启动后订阅 state、telemetry、timeline、alerts、security topic。
-- 维护内存版 StateBoard。
-- 周期发布 guardian state。
+- 状态：部分落地。
+- 已新增 `main/roles/guardian_node.c/.h`。
+- Guardian 启动后会声明 `policy/privacy/audit/stateboard/watchdog` 边界。
+- MQTT runtime 已订阅全局 `agent/timeline`，Guardian 会对关键事件生成 `espagent.guardian.audit.v1` 审计事件；错误事件会同步到 alerts。
+- 尚未维护完整内存版 StateBoard。
+- 尚未发布专用 guardian stateboard/watchdog topic。
 - 不执行硬件动作。
+
+### Phase 2.5: OutputMessage / ReAct 结果闭环
+
+- 状态：已落地第一版。
+- 下游 Sensor/Control 的 `mesh_command_result` 已升级为结构化 `schema=espagent.output.v1`。
+- OutputMessage 字段包含 `msg_id`、`node_id`、`role`、`sender`、`recipient`、`command_id`、`trace_id`、`action`、`status`、`summary`、`result`、`error`、`ts_ms`。
+- Coordinator `mesh_send_command` 在 `require_ack=true` 时等待相同 `command_id` 的 OutputMessage。
+- 等待成功后，工具结果返回 `output_message={...}`，进入下一轮 LLM tool_result，从而支持“推理 -> 下发 -> 观察远端结果 -> 再推理”的跨节点 ReAct 闭环。
+- 当前等待是同步阻塞，后续应演进为 async task_id + message_bus 回注。
 
 ### Phase 3: Policy Check 链路
 
+- 状态：已落地第一版。
 - Coordinator 在高风险或远程硬件命令前发布 `policy_check`。
 - Guardian 返回 `policy_decision`。
 - Coordinator 根据裁决：
@@ -289,7 +302,7 @@ espagent/cube1345/guardian/watchdog
   - require_confirm：请求 Feishu/Android/P4 二次确认。
   - sanitize：只把脱敏数据交给 LLM。
 
-第一阶段可先对低风险动作做自动 allow，对未知动作 deny。
+当前第一版已对低/中风险白名单动作自动 allow，对高风险或未知动作 deny；`require_confirm` 和 `sanitize` 仍是后续扩展。
 
 ### Phase 4: Control 双层安全
 
