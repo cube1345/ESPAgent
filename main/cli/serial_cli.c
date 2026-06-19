@@ -17,6 +17,7 @@
 #include "proactive/proactive_service.h"
 #include "skills/skill_loader.h"
 #include "ota/ota_manager.h"
+#include "sensors/sensor_mqtt.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -1054,12 +1055,30 @@ static int cmd_ota_update(int argc, char **argv)
     return err == ESP_OK ? 0 : 1;
 }
 
+static int cmd_stateboard_show(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+
+    char *json = calloc(1, 2048);
+    if (!json) {
+        printf("Out of memory.\n");
+        return 1;
+    }
+    esp_err_t err = sensor_mqtt_stateboard_json(json, 2048);
+    printf("stateboard_show status: %s\n", esp_err_to_name(err));
+    printf("%s\n", err == ESP_OK ? json : "(empty)");
+    free(json);
+    return err == ESP_OK ? 0 : 1;
+}
+
 esp_err_t serial_cli_init(void)
 {
     esp_console_repl_t *repl = NULL;
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_config.prompt = "ESPAgent> ";
     repl_config.max_cmdline_length = 256;
+    repl_config.task_stack_size = ESPAGENT_CLI_STACK;
 
 #if CONFIG_ESP_CONSOLE_UART_DEFAULT || CONFIG_ESP_CONSOLE_UART_CUSTOM
     esp_console_dev_uart_config_t hw_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
@@ -1440,6 +1459,14 @@ esp_err_t serial_cli_init(void)
         .func = &cmd_ota_update,
     };
     esp_console_cmd_register(&ota_update_cmd);
+
+    /* stateboard_show */
+    esp_console_cmd_t stateboard_show_cmd = {
+        .command = "stateboard_show",
+        .help = "Show recent in-memory AgentMesh StateBoard events",
+        .func = &cmd_stateboard_show,
+    };
+    esp_console_cmd_register(&stateboard_show_cmd);
 
     /* restart */
     esp_console_cmd_t restart_cmd = {

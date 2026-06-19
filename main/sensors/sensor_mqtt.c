@@ -4,7 +4,7 @@
 #include "mesh/mesh_protocol.h"
 #include "node/node_profile.h"
 #include "roles/role_config.h"
-#include "tools/tool_aht10.h"
+#include "tools/tool_environment.h"
 #include "tools/tool_gpio.h"
 #include "tools/tool_servo.h"
 
@@ -44,6 +44,8 @@ static const char *TAG = "sensor_mqtt";
 #define MQTT_OUTPUT_JSON_SIZE   768
 #define MQTT_POLICY_CACHE_DEPTH 8
 #define MQTT_POLICY_JSON_SIZE   512
+#define MQTT_STATEBOARD_DEPTH   12
+#define MQTT_STATEBOARD_JSON_SIZE 384
 
 typedef struct {
     char topic[MQTT_PUB_TOPIC_SIZE];
@@ -64,6 +66,15 @@ typedef struct {
     char decision_json[MQTT_POLICY_JSON_SIZE];
 } policy_cache_item_t;
 
+typedef struct {
+    bool used;
+    int64_t ts_ms;
+    char event_type[32];
+    char status[16];
+    char command_id[ESPAGENT_MESH_ID_MAX];
+    char summary[MQTT_STATEBOARD_JSON_SIZE];
+} stateboard_item_t;
+
 static portMUX_TYPE s_dht22_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool s_mhz19_uart_ready = false;
 static QueueHandle_t s_pub_queue = NULL;
@@ -71,10 +82,16 @@ static SemaphoreHandle_t s_output_mutex = NULL;
 static SemaphoreHandle_t s_policy_mutex = NULL;
 static output_cache_item_t s_output_cache[MQTT_OUTPUT_CACHE_DEPTH];
 static policy_cache_item_t s_policy_cache[MQTT_POLICY_CACHE_DEPTH];
+static stateboard_item_t s_stateboard[MQTT_STATEBOARD_DEPTH];
 static uint32_t s_output_cache_next = 0;
 static uint32_t s_policy_cache_next = 0;
+static uint32_t s_stateboard_next = 0;
 
 static void json_add_optional_string(cJSON *root, const char *key, const char *value);
+static void stateboard_note_event(const char *event_type,
+                                  const char *status,
+                                  const char *summary,
+                                  const char *command_id);
 
 static int wait_level_timeout(int pin, int level, int timeout_us)
 {
@@ -157,7 +174,7 @@ static esp_err_t dht22_read(float *temperature, float *humidity)
     return ESP_OK;
 }
 
-static esp_err_t read_dht22_with_retry(float *temperature, float *humidity)
+static __attribute__((unused)) esp_err_t read_dht22_with_retry(float *temperature, float *humidity)
 {
     esp_err_t err = ESP_FAIL;
     for (int i = 0; i < DHT22_MAX_RETRIES; i++) {
@@ -212,7 +229,7 @@ static esp_err_t mhz19_uart_init(void)
     return ESP_OK;
 }
 
-static esp_err_t mhz19_read_co2(int *co2_ppm)
+static __attribute__((unused)) esp_err_t mhz19_read_co2(int *co2_ppm)
 {
     ESP_RETURN_ON_ERROR(mhz19_uart_init(), TAG, "MH-Z19 UART unavailable");
 
@@ -735,11 +752,172 @@ esp_err_t sensor_mqtt_publish_node_event(const char *event_type, const char *det
     return mqtt_queue_publish(ESPAGENT_SENSOR_MQTT_TOPIC_EVENTS, json);
 }
 
+static void stateboard_note_event(const char *event_type,
+                                  const char *status,
+                                  const char *summary,
+                                  const char *command_id)
+{
+    stateboard_item_t *slot = &s_stateboard[s_stateboard_next % MQTT_STATEBOARD_DEPTH];
+    memset(slot, 0, sizeof(*slot));
+    slot->used = true;
+    slot->ts_ms = esp_timer_get_time() / 1000;
+    snprintf(slot->event_type, sizeof(slot->event_type), "%s", event_type ? event_type : "event");
+    snprintf(slot->status, sizeof(slot->status), "%s", status ? status : "");
+    snprintf(slot->command_id, sizeof(slot->command_id), "%s", command_id ? command_id : "");
+    snprintf(slot->summary, sizeof(slot->summary), "%s", summary ? summary : "");
+    s_stateboard_next++;
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return;
+    }
+    cJSON_AddStringToObject(root, "schema", "espagent.stateboard.v1");
+    cJSON_AddStringToObject(root, "event", "stateboard_update");
+    cJSON_AddStringToObject(root, "node_id", espagent_node_id());
+    cJSON_AddStringToObject(root, "role", espagent_node_role());
+    cJSON_AddStringToObject(root, "last_event", slot->event_type);
+    cJSON_AddStringToObject(root, "last_status", slot->status);
+    json_add_optional_string(root, "command_id", slot->command_id);
+    cJSON_AddStringToObject(root, "summary", slot->summary);
+    cJSON_AddNumberToObject(root, "ts_ms", (double)slot->ts_ms);
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) {
+        return;
+    }
+    (void)mqtt_queue_publish(ESPAGENT_MESH_TOPIC_GUARDIAN_STATEBOARD, json);
+    cJSON_free(json);
+}
+
 static void json_add_optional_string(cJSON *root, const char *key, const char *value)
 {
     if (value && value[0]) {
         cJSON_AddStringToObject(root, key, value);
     }
+}
+
+esp_err_t sensor_mqtt_stateboard_json(char *buf, size_t buf_size)
+{
+    if (!buf || buf_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *items = cJSON_CreateArray();
+    if (!root || !items) {
+        cJSON_Delete(root);
+        cJSON_Delete(items);
+        return ESP_ERR_NO_MEM;
+    }
+
+    cJSON_AddStringToObject(root, "schema", "espagent.stateboard.v1");
+    cJSON_AddStringToObject(root, "node_id", espagent_node_id());
+    cJSON_AddStringToObject(root, "role", espagent_node_role());
+
+    uint32_t count = s_stateboard_next < MQTT_STATEBOARD_DEPTH
+                         ? s_stateboard_next
+                         : MQTT_STATEBOARD_DEPTH;
+    uint32_t start = s_stateboard_next > count ? s_stateboard_next - count : 0;
+    for (uint32_t i = 0; i < count; i++) {
+        const stateboard_item_t *slot = &s_stateboard[(start + i) % MQTT_STATEBOARD_DEPTH];
+        if (!slot->used) {
+            continue;
+        }
+        cJSON *item = cJSON_CreateObject();
+        if (!item) {
+            continue;
+        }
+        cJSON_AddStringToObject(item, "event", slot->event_type);
+        cJSON_AddStringToObject(item, "status", slot->status);
+        json_add_optional_string(item, "command_id", slot->command_id);
+        cJSON_AddStringToObject(item, "summary", slot->summary);
+        cJSON_AddNumberToObject(item, "ts_ms", (double)slot->ts_ms);
+        cJSON_AddItemToArray(items, item);
+    }
+    cJSON_AddItemToObject(root, "items", items);
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) {
+        return ESP_ERR_NO_MEM;
+    }
+    snprintf(buf, buf_size, "%s", json);
+    cJSON_free(json);
+    return ESP_OK;
+}
+
+esp_err_t sensor_mqtt_publish_output_message(const char *event,
+                                             const char *command_id,
+                                             const char *trace_id,
+                                             const char *action,
+                                             const char *recipient,
+                                             esp_err_t result_err,
+                                             const char *summary,
+                                             const char *result_text)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    int64_t ts_ms = esp_timer_get_time() / 1000;
+    char msg_id[96] = {0};
+    snprintf(msg_id, sizeof(msg_id), "out-%s-%lld",
+             command_id && command_id[0] ? command_id : espagent_node_id(),
+             (long long)ts_ms);
+
+    cJSON_AddStringToObject(root, "schema", "espagent.output.v1");
+    cJSON_AddStringToObject(root, "msg_id", msg_id);
+    cJSON_AddStringToObject(root, "node_id", espagent_node_id());
+    cJSON_AddStringToObject(root, "role", espagent_node_role());
+    cJSON_AddStringToObject(root, "sender", espagent_node_role());
+    cJSON_AddStringToObject(root, "sender_node", espagent_node_id());
+    cJSON_AddStringToObject(root, "recipient", recipient ? recipient : "coordinator_agent");
+    cJSON_AddStringToObject(root, "location", espagent_node_location());
+    cJSON_AddStringToObject(root, "type", "output");
+    cJSON_AddStringToObject(root, "event", event ? event : "output");
+    json_add_optional_string(root, "command_id", command_id);
+    json_add_optional_string(root, "trace_id", trace_id);
+    json_add_optional_string(root, "action", action);
+    cJSON_AddStringToObject(root, "status", result_err == ESP_OK ? "ok" : "error");
+    cJSON_AddStringToObject(root, "esp_err", esp_err_to_name(result_err));
+    cJSON_AddStringToObject(root, "summary", summary ? summary : "");
+
+    cJSON *result_obj = cJSON_CreateObject();
+    if (result_obj) {
+        cJSON_AddStringToObject(result_obj, "text", result_text ? result_text : "");
+        cJSON_AddItemToObject(root, "result", result_obj);
+    }
+
+    if (result_err == ESP_OK) {
+        cJSON_AddNullToObject(root, "error");
+    } else {
+        cJSON *err_obj = cJSON_CreateObject();
+        if (err_obj) {
+            cJSON_AddStringToObject(err_obj, "code", esp_err_to_name(result_err));
+            cJSON_AddStringToObject(err_obj, "message", result_text ? result_text : "");
+            cJSON_AddItemToObject(root, "error", err_obj);
+        }
+    }
+    cJSON_AddNumberToObject(root, "ts_ms", (double)ts_ms);
+
+    output_cache_store_json(root);
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    esp_err_t err = sensor_mqtt_publish_text(ESPAGENT_SENSOR_MQTT_TOPIC_EVENTS, json);
+    esp_err_t timeline_err = sensor_mqtt_publish_text(ESPAGENT_MESH_TOPIC_TIMELINE, json);
+    stateboard_note_event(event ? event : "output",
+                          result_err == ESP_OK ? "ok" : "error",
+                          summary ? summary : "",
+                          command_id);
+    cJSON_free(json);
+    return err == ESP_OK ? timeline_err : err;
 }
 
 esp_err_t sensor_mqtt_publish_timeline_event(const char *phase,
@@ -785,6 +963,10 @@ esp_err_t sensor_mqtt_publish_timeline_event(const char *phase,
     }
 
     esp_err_t err = mqtt_queue_publish(ESPAGENT_MESH_TOPIC_TIMELINE, json);
+    stateboard_note_event(event_type,
+                          status,
+                          summary,
+                          command_id);
     cJSON_free(json);
     return err;
 }
@@ -917,59 +1099,18 @@ static void publish_mesh_command_result(const espagent_mesh_command_t *cmd,
                                         esp_err_t result_err,
                                         const char *result)
 {
-    cJSON *root = cJSON_CreateObject();
-    if (!root) {
+    if (!cmd) {
         return;
     }
 
-    int64_t ts_ms = esp_timer_get_time() / 1000;
-    char msg_id[96] = {0};
-    snprintf(msg_id, sizeof(msg_id), "out-%s-%lld",
-             cmd->command_id[0] ? cmd->command_id : "none",
-             (long long)ts_ms);
-    cJSON_AddStringToObject(root, "schema", "espagent.output.v1");
-    cJSON_AddStringToObject(root, "msg_id", msg_id);
-    cJSON_AddStringToObject(root, "node_id", espagent_node_id());
-    cJSON_AddStringToObject(root, "role", espagent_node_role());
-    cJSON_AddStringToObject(root, "sender", espagent_node_role());
-    cJSON_AddStringToObject(root, "sender_node", espagent_node_id());
-    cJSON_AddStringToObject(root, "recipient", "coordinator_agent");
-    cJSON_AddStringToObject(root, "location", espagent_node_location());
-    cJSON_AddStringToObject(root, "type", "output");
-    cJSON_AddStringToObject(root, "event", "mesh_command_result");
-    cJSON_AddStringToObject(root, "command_id", cmd->command_id);
-    cJSON_AddStringToObject(root, "trace_id", cmd->trace_id);
-    cJSON_AddStringToObject(root, "action", cmd->action);
-    cJSON_AddStringToObject(root, "status", result_err == ESP_OK ? "ok" : "error");
-    cJSON_AddStringToObject(root, "esp_err", esp_err_to_name(result_err));
-    cJSON_AddStringToObject(root, "summary", result ? result : "");
-    cJSON *result_obj = cJSON_CreateObject();
-    if (result_obj) {
-        cJSON_AddStringToObject(result_obj, "text", result ? result : "");
-        cJSON_AddItemToObject(root, "result", result_obj);
-    }
-    if (result_err == ESP_OK) {
-        cJSON_AddNullToObject(root, "error");
-    } else {
-        cJSON *err_obj = cJSON_CreateObject();
-        if (err_obj) {
-            cJSON_AddStringToObject(err_obj, "code", esp_err_to_name(result_err));
-            cJSON_AddStringToObject(err_obj, "message", result ? result : "");
-            cJSON_AddItemToObject(root, "error", err_obj);
-        }
-    }
-    cJSON_AddNumberToObject(root, "ts_ms", (double)ts_ms);
-
-    output_cache_store_json(root);
-
-    char *json = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    if (!json) {
-        return;
-    }
-
-    (void)sensor_mqtt_publish_text(ESPAGENT_SENSOR_MQTT_TOPIC_EVENTS, json);
-    (void)sensor_mqtt_publish_text(ESPAGENT_MESH_TOPIC_TIMELINE, json);
+    (void)sensor_mqtt_publish_output_message("mesh_command_result",
+                                             cmd->command_id,
+                                             cmd->trace_id,
+                                             cmd->action,
+                                             "coordinator_agent",
+                                             result_err,
+                                             result ? result : "",
+                                             result ? result : "");
     (void)sensor_mqtt_publish_timeline_event("result",
                                              "mesh_command_result",
                                              result_err == ESP_OK ? "ok" : "error",
@@ -978,7 +1119,34 @@ static void publish_mesh_command_result(const espagent_mesh_command_t *cmd,
                                              cmd->target_role,
                                              cmd->target_node,
                                              cmd->action);
-    cJSON_free(json);
+}
+
+static esp_err_t read_temperature_humidity_result(char *result, size_t result_size)
+{
+    tool_environment_values_t values = {0};
+    char status[96] = {0};
+    esp_err_t err = tool_environment_read_values(&values, status, sizeof(status));
+    if (err == ESP_OK &&
+        values.temperature_c_x10 != -1 &&
+        values.humidity_percent_x10 != -1) {
+        snprintf(result, result_size,
+                 "OK: AHT20 on SDA=%d SCL=%d addr=0x%02x -> temperature=%.1f C, humidity=%.1f%% [%s]",
+                 ESPAGENT_AHT10_DEFAULT_SDA_GPIO,
+                 ESPAGENT_AHT10_DEFAULT_SCL_GPIO,
+                 ESPAGENT_AHT10_DEFAULT_ADDR,
+                 (double)values.temperature_c_x10 / 10.0,
+                 (double)values.humidity_percent_x10 / 10.0,
+                 status);
+        return ESP_OK;
+    }
+
+    snprintf(result, result_size,
+             "Error: AHT20 not readable on SDA=%d SCL=%d addr=0x%02x [%s]",
+             ESPAGENT_AHT10_DEFAULT_SDA_GPIO,
+             ESPAGENT_AHT10_DEFAULT_SCL_GPIO,
+             ESPAGENT_AHT10_DEFAULT_ADDR,
+             status[0] ? status : esp_err_to_name(err));
+    return err == ESP_OK ? ESP_ERR_NOT_FOUND : err;
 }
 
 static bool handle_sensor_mesh_command(const espagent_mesh_command_t *cmd)
@@ -991,10 +1159,7 @@ static bool handle_sensor_mesh_command(const espagent_mesh_command_t *cmd)
     }
 
     char result[384] = {0};
-    esp_err_t err = tool_aht10_read_temperature_humidity_execute(
-        cmd->args_json[0] ? cmd->args_json : "{}",
-        result,
-        sizeof(result));
+    esp_err_t err = read_temperature_humidity_result(result, sizeof(result));
     ESP_LOGI(TAG, "Mesh sensor command executed: id=%s action=%s status=%s result=%s",
              cmd->command_id[0] ? cmd->command_id : "(none)",
              cmd->action,
@@ -1002,6 +1167,67 @@ static bool handle_sensor_mesh_command(const espagent_mesh_command_t *cmd)
              result);
     publish_mesh_command_result(cmd, err, result);
     return true;
+}
+
+static bool control_command_has_guardian_allow(const espagent_mesh_command_t *cmd,
+                                               char *reason,
+                                               size_t reason_size)
+{
+    if (!cmd || !cmd->command_id[0]) {
+        snprintf(reason, reason_size, "missing command_id for Guardian decision lookup");
+        return false;
+    }
+
+    char decision_json[MQTT_POLICY_JSON_SIZE] = {0};
+    esp_err_t err = sensor_mqtt_wait_policy_decision(cmd->command_id,
+                                                     decision_json,
+                                                     sizeof(decision_json),
+                                                     300);
+    if (err != ESP_OK) {
+        snprintf(reason, reason_size,
+                 "missing Guardian allow decision for command_id=%s",
+                 cmd->command_id);
+        return false;
+    }
+
+    cJSON *root = cJSON_Parse(decision_json);
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        snprintf(reason, reason_size, "Guardian decision is not valid JSON");
+        return false;
+    }
+
+    const char *decision = json_optional_string(root, "decision");
+    const char *action = json_optional_string(root, "action");
+    const char *target_role = json_optional_string(root, "target_role");
+    const char *target_node = json_optional_string(root, "target_node");
+
+    bool allowed = strcmp(decision, "allow") == 0;
+    if (allowed && action[0] && strcmp(action, cmd->action) != 0) {
+        allowed = false;
+        snprintf(reason, reason_size,
+                 "Guardian decision action mismatch: decision=%s command=%s",
+                 action, cmd->action);
+    } else if (allowed && target_role[0] && strcmp(target_role, espagent_node_role()) != 0) {
+        allowed = false;
+        snprintf(reason, reason_size,
+                 "Guardian decision target_role mismatch: decision=%s local=%s",
+                 target_role, espagent_node_role());
+    } else if (allowed && target_node[0] && strcmp(target_node, espagent_node_id()) != 0) {
+        allowed = false;
+        snprintf(reason, reason_size,
+                 "Guardian decision target_node mismatch: decision=%s local=%s",
+                 target_node, espagent_node_id());
+    } else if (allowed) {
+        snprintf(reason, reason_size, "Guardian allow decision verified");
+    } else {
+        snprintf(reason, reason_size,
+                 "Guardian decision is not allow: %s",
+                 decision[0] ? decision : "(empty)");
+    }
+
+    cJSON_Delete(root);
+    return allowed;
 }
 
 static bool handle_control_mesh_command(const espagent_mesh_command_t *cmd)
@@ -1014,7 +1240,13 @@ static bool handle_control_mesh_command(const espagent_mesh_command_t *cmd)
     char result[384] = {0};
     const char *args = cmd->args_json[0] ? cmd->args_json : "{}";
 
-    if (cmd->safety_level > ESPAGENT_MESH_SAFETY_MEDIUM) {
+    char policy_reason[192] = {0};
+    if (!control_command_has_guardian_allow(cmd, policy_reason, sizeof(policy_reason))) {
+        snprintf(result, sizeof(result),
+                 "Error: control command denied before local execution: %s",
+                 policy_reason);
+        err = ESP_ERR_INVALID_STATE;
+    } else if (cmd->safety_level > ESPAGENT_MESH_SAFETY_MEDIUM) {
         snprintf(result, sizeof(result),
                  "Error: command safety_level=%d requires a future safety interlock",
                  cmd->safety_level);
@@ -1205,34 +1437,41 @@ static esp_err_t publish_node_event(int fd, const char *event_type, const char *
 
 static esp_err_t publish_sensor_data(int fd)
 {
-    float temp = NAN;
-    float humidity = NAN;
-    int co2 = 0;
-
     if (!espagent_node_should_publish_sensor_telemetry()) {
         ESP_LOGD(TAG, "skip sensor telemetry for role=%s capabilities=%s",
                  espagent_node_role(), espagent_node_capabilities());
         return publish_node_state(fd, "online");
     }
 
-    esp_err_t dht_err = read_dht22_with_retry(&temp, &humidity);
-    esp_err_t co2_err = mhz19_read_co2(&co2);
-    if (dht_err != ESP_OK || co2_err != ESP_OK) {
-        ESP_LOGW(TAG, "skip MQTT publish: DHT22=%s MH-Z19=%s",
-                 esp_err_to_name(dht_err), esp_err_to_name(co2_err));
+    tool_environment_values_t values = {0};
+    char env_status[96] = {0};
+    esp_err_t env_err = tool_environment_read_values(&values, env_status, sizeof(env_status));
+    if (env_err != ESP_OK ||
+        values.temperature_c_x10 == -1 ||
+        values.humidity_percent_x10 == -1) {
+        ESP_LOGW(TAG, "skip MQTT telemetry: AHT20 unavailable (%s, %s)",
+                 esp_err_to_name(env_err), env_status);
         return publish_node_state(fd, "online");
     }
 
     char json[384];
     int64_t ts_ms = esp_timer_get_time() / 1000;
+    double temp = (double)values.temperature_c_x10 / 10.0;
+    double humidity = (double)values.humidity_percent_x10 / 10.0;
     snprintf(json, sizeof(json),
              "{\"node_id\":\"%s\",\"role\":\"%s\",\"location\":\"%s\","
              "\"capabilities\":\"%s\","
              "\"type\":\"telemetry\",\"temp\":%.1f,\"humidity\":%.1f,"
-             "\"co2\":%d,\"ts_ms\":%lld}",
+             "\"co2\":%d,\"tvoc\":%d,\"light_lux\":%.1f,"
+             "\"sensor\":\"AHT20\",\"status\":\"%s\",\"ts_ms\":%lld}",
              espagent_node_id(), espagent_node_role(), espagent_node_location(),
              espagent_node_capabilities(),
-             (double)temp, (double)humidity, co2, (long long)ts_ms);
+             temp, humidity,
+             values.co2eq_ppm,
+             values.tvoc_ppb,
+             (double)values.light_lux_x10 / 10.0,
+             env_status,
+             (long long)ts_ms);
 
     if (mqtt_publish(fd, ESPAGENT_SENSOR_MQTT_TOPIC_TELEMETRY, json) != 0) {
         return ESP_FAIL;

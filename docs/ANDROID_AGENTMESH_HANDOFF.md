@@ -52,7 +52,7 @@ Feishu / WebSocket / MQTT timeline / P4 / Android
 - ESP32-S3 端仍是一个 `agent_loop` 串行处理 LLM 回合，不是多个 Linux 进程式 Agent。
 - `spawn_subagent` 已实现，是同一 Coordinator MCU 上临时创建的 FreeRTOS 子任务，工具权限受限。
 - MQTT Mesh 已能表达跨节点命令、状态、遥测、timeline 和结构化 OutputMessage。
-- `development` 分支已把第四块 ESP32-S3 推荐角色从 `display_agent` 调整为 `guardian_agent`，负责权限裁决、数据治理、审计、StateBoard 和 Watchdog。当前固件已落地 Guardian 启动边界、观察式 audit，以及 `policy_check -> policy_decision` 同步裁决第一版。
+- `development` 分支已把第四块 ESP32-S3 推荐角色从 `display_agent` 调整为 `guardian_agent`，负责权限裁决、数据治理、审计、StateBoard 和 Watchdog。当前固件已落地 Guardian 启动边界、观察式 audit、`policy_check -> policy_decision` 裁决、Control 本地 allow decision 校验，以及 `async_task_id -> OutputMessage -> message_bus` 回注闭环。
 - Android 端第一阶段做 Display / Debug / Confirm Terminal，不直接替代 Coordinator，不绕过 Guardian 和 Control 的安全边界。
 
 ## 可参考项目

@@ -17,9 +17,9 @@
 | USB 口 | 节点 | 当前角色 | 当前状态 |
 |--------|------|----------|----------|
 | `/dev/ttyUSB0` | `esp32s3-coordinator-01` | `coordinator_agent` | 已烧录，串口确认 `state online`；Feishu bot `咕咕嘎嘎！` 端到端回复已恢复 |
-| `/dev/ttyUSB1` | `esp32s3-sensor-01` | `sensor_agent` | 已烧录，串口确认 `state online`；presence/environment monitor 已启动；当前 DHT22/MH-Z19 未读到 |
-| `/dev/ttyUSB2` | `esp32s3-control-01` | `control_agent` | 已烧录，串口确认 `state online`；用于接收控制类 Mesh command |
-| `/dev/ttyUSB3` | `esp32s3-guardian-01` | `guardian_agent` | 开发中；用于审计 OutputMessage、观察 timeline、发布 Guardian audit/alerts |
+| `/dev/ttyUSB1` | `esp32s3-sensor-01` | `sensor_agent` | 已烧录，串口确认 `state online`；AHT20 已实测读取 `27.x C / 45-46%RH` 并发布 telemetry |
+| `/dev/ttyUSB2` | `esp32s3-control-01` | `control_agent` | 已烧录，串口确认 `state online`；已验证接收控制类 Mesh command 并执行 WS2812 状态灯 |
+| `/dev/ttyUSB3` | `esp32s3-guardian-01` | `guardian_agent` | 已烧录并参与 policy/audit；用于审计 OutputMessage、观察 timeline、发布 Guardian audit/alerts |
 
 串口监视说明：
 
@@ -113,7 +113,8 @@
 
 - 订阅全局 timeline 和节点事件。
 - 审计 `OutputMessage`、工具调用结果、Mesh command 和最终回复。
-- 对错误事件发布 alerts，后续继续扩展人工确认、隐私脱敏、StateBoard 和 watchdog。
+- 处理 `policy_check` 并发布 `policy_decision`，维护轻量 StateBoard。
+- 对错误事件发布 alerts，后续继续扩展人工确认、隐私脱敏和 watchdog。
 - 不直接执行硬件动作，不替代 P4/Android 显示终端。
 
 建议配置：
@@ -175,33 +176,38 @@ espagent/roles/control_agent/command
   - `读取温湿度` -> 回复已向 `sensor_agent` 发送读取指令。
   - `点亮WS2812为蓝色` -> 回复已转发给 `control_agent`。
 - Coordinator 对上述两类常见飞书指令已加入确定性 Mesh 路由和假成功保护，不再完全依赖 LLM 自己选择 `mesh_send_command`。
-- `mesh_send_command` 会在 `require_ack=true` 时等待相同 `command_id` 的结构化 `OutputMessage`，并把 `output_message={...}` 作为 tool result 回灌给下一轮 LLM，形成跨节点 ReAct 闭环。
+- `mesh_send_command` 默认异步：返回 `async_task_id` 后由后台 task 等待相同 `command_id` 的结构化 `OutputMessage`，再通过 `message_bus` 注入内部结果消息，让 LLM 在下一回合总结远端真实执行结果。
 - `mesh_send_command` 在发布真正的 node/role command 前会先向 `espagent/security/policy_check` 发布 `espagent.policy_check.v1`，等待 Guardian 在 `espagent/security/decision` 上返回 `espagent.policy_decision.v1`。只有 `decision=allow` 才继续下发。
 - 2026-06-15 飞书入口压力测试 `tools/stress_feishu_usb0_3.py --rounds 2 --interval 30 --settle 220 --quiet` 通过：飞书发送 4/4，USB1 sensor 接收/执行 2/2，USB2 control 接收/执行 2/2，0 崩溃，PASS。
 - 历史进度：USB0 `coordinator_agent` 和 USB1 `control_agent` 曾连接到同一个 MQTT broker，串口验证了各自 state/events 发布；USB1 `control_agent` 曾验证接收 `espagent/cube1345/roles/control_agent/command` 并 dry-run 校验。
 - 2026-06-15 四板串口确认均在线；Coordinator MQTT publish、Sensor/Control MQTT receive、result event 三段日志已经在串口/MQTT 压测与飞书入口压测中形成基础证据。
 - `mesh_send_command` 工具已加入 LLM tool registry，Coordinator 可以通过 MQTT 向指定 node/role 发布标准 Mesh command。
 - Sensor 角色收到 `read_temperature_humidity` command 时，已支持执行 AHT10/AHT20 温湿度读取，并把 `mesh_command_result` 发布到本节点 events 和全局 timeline。
+- 2026-06-18 USB1 AHT20 已完成实物验证：I2C `0x38` 正常响应，`read_temperature_humidity` 和周期 telemetry 均返回 AHT20 温湿度；典型串口读数 `temperature=27.4 C, humidity=45.2%`。
 - `main/roles/role_config.c/.h` 根据 role/capability 判断节点应该运行哪些服务。
 - `main/roles/coordinator_node.c/.h`、`sensor_node.c/.h`、`control_node.c/.h`、`guardian_node.c/.h`、`display_node.c/.h` 已作为职责入口接入启动流程。
 - `main/app/espagent_app.c` 已根据 role/capability 选择性启动 LLM/聊天入口、scheduler/proactive、sensor monitor、control boot demo、guardian/display 边界服务。
 - `main/mesh/mesh_types.h` 和 `main/mesh/mesh_protocol.c/.h` 已定义 Mesh command 类型，并解析/校验 MQTT command。
-- MQTT node/role command 现在会进入 `mesh_protocol` 校验 `action`、`target_node`、`target_role`；Sensor `read_temperature_humidity` 已有白名单执行路径；Control 对 `set_status_light`、`ws2812_set`、`servo_write`、`gpio_write` 已有直接执行路径，但还没有 command queue、鉴权、审计和 safety interlock。
+- MQTT node/role command 现在会进入 `mesh_protocol` 校验 `action`、`target_node`、`target_role`；Sensor `read_temperature_humidity` 已有白名单执行路径；Control 对 `set_status_light`、`ws2812_set`、`servo_write`、`gpio_write` 已有直接执行路径，并会在执行前校验本机缓存的 Guardian allow decision；后续仍需 command queue、签名认证、人工确认和 safety interlock。
 - Feishu 通信板 MQTT 桥接已完成第一版：
   - `feishu_inbound` 发布到 `espagent/nodes/<coordinator_id>/events`、`espagent/agent/dispatch`、`espagent/agent/timeline`。
   - `feishu_outbound` 发布到 `espagent/nodes/<coordinator_id>/events`、`espagent/agent/timeline`。
   - MQTT publish queue 支持连接前事件暂存，连接成功后 flush。
   - MQTT inbound packet 已支持标准 remaining length 解析。
 - Feishu/LLM 通信板已接入启动后 SNTP 校时，`get_current_time` 优先返回同步后的本地系统时间，天气仍使用高德 `get_weather`。
+- Automation runtime 已接入工具层和后台任务：`automation_create_workflow` 处理顺序/延迟动作，`automation_create_rule` 处理持久化条件监控，规则保存到 `/spiffs/automation.json`。
+- Automation 支持多个任务但有明确上限：条件规则由单个 `rule_task` 轮询，最多 8 条；多步 workflow 每个启动一个临时 `workflow_task`，最多 8 个 workflow 槽位，每个最多 8 步。
+- 2026-06-18 已验证湿度条件联动：USB0 创建 `humidity_percent > 40` 规则，USB1 AHT20 返回约 `46.0%RH`，USB2 执行 `set_status_light` 后 WS2812 输出红色 `rgb=(255,0,0)`；该测试规则已删除，说明机制可用于默认后台任务，但不会留下测试副作用。
 
-尚未实现：
+尚未完善：
 
 - MQTT command queue。
 - MQTT command 到 message_bus 的安全转发。
-- 完整 command queue、强制鉴权、人工确认和 safety interlock。
-- Coordinator 已能等待远端 `OutputMessage` 并回灌给 LLM；更完整的异步 task_id、超时恢复和持久化 trace 仍待实现。
+- 完整 command queue、签名认证、人工确认和 safety interlock。
+- Coordinator 已能通过异步 task_id 等待远端 `OutputMessage` 并回灌给 LLM；更完整的超时恢复、trace 查询和任务树聚合仍待实现。
+- Automation 目前支持创建、列出和删除；自然语言暂停/恢复、规则状态面板、复杂多条件表达式、规则冲突检测、运行中 workflow 取消和 workflow 重启恢复仍待完善。
 - 根据 role 自动裁剪工具列表。
-- 更完整的 timeline 持久化、trace 聚合和 Guardian StateBoard。
+- 更完整的 timeline 持久化、trace 聚合、Guardian StateBoard API 和 watchdog。
 
 ## 资源使用设计
 
@@ -227,7 +233,7 @@ espagent/roles/control_agent/command
 | `coordinator_agent` | LLM、Feishu、WebSocket、MQTT、SNTP、cron/proactive、session/context、临时 subagent | 四者中最高，但仍有较大 PSRAM/Flash 余量 |
 | `sensor_agent` | sensor sampling、environment/presence monitor、MQTT telemetry、serial CLI | 中等，尚缺 sensor cache、滤波统计、阈值事件 |
 | `control_agent` | control boundary、MQTT command receiver、本地 actuator tools、boot servo demo | 中等偏低，尚缺 command queue、safety interlock、actuator_state |
-| `guardian_agent` | guardian boundary、MQTT policy_check/decision、timeline 订阅、OutputMessage audit、错误 alerts | 中等，尚缺人工确认、StateBoard、watchdog 聚合 |
+| `guardian_agent` | guardian boundary、MQTT policy_check/decision、timeline 订阅、OutputMessage audit、错误 alerts、StateBoard | 中等，尚缺人工确认、watchdog 聚合 |
 
 当前 profile 已经不只是声明能力：`espagent_app` 会根据 role/capability 选择性启动服务。推荐结构仍继续保持：
 

@@ -1,10 +1,19 @@
 # ESPAgent
 
-ESPAgent is an ESP32-S3 firmware project that runs a lightweight AI agent directly on ESP-IDF and FreeRTOS. It connects messaging channels, local WebSocket access, persistent SPIFFS memory, LLM tool use, and hardware-control tools into one embedded agent runtime.
+ESPAgent is an ESP32-S3 Agent Mesh firmware project built on ESP-IDF and FreeRTOS. It runs a lightweight LLM Agent runtime on MCU hardware, connects Feishu/Lark chat, local WebSocket access, Serial CLI, SPIFFS memory, ReAct-style tool calling, MQTT Mesh communication, and real hardware tools into one embedded multi-node control system.
 
 The project is maintained as ESPAgent. Public documentation, runtime logs, generated binaries, and directory structure should use the ESPAgent name consistently.
 
-The current firmware is the first edge-node phase of the planned LingShu Agent Mesh: one ESP32-S3 runs the local agent runtime, publishes node state and telemetry over MQTT mesh topics, and keeps Feishu/WebSocket/Cron/Proactive input flowing through the same guarded `agent_loop`. It is not yet a cloud Coordinator or multiple independent LLM agent processes.
+The current implementation targets a four-ESP32-S3 Agent Mesh:
+
+- `coordinator_agent`: Feishu/WebSocket entry, LLM ReAct loop, task dispatch, timeline, and user replies.
+- `sensor_agent`: AHT10/AHT20, SGP30, BH1750/GY-30, presence, and environment telemetry.
+- `control_agent`: WS2812, GPIO, servo, relay/actuator boundary, and whitelisted hardware execution.
+- `guardian_agent`: `policy_check`, `policy_decision`, audit, privacy boundary, watchdog, and lightweight StateBoard.
+
+ESP32-P4+C6 and Android are Display Terminals. They subscribe to Mesh state, telemetry, timeline, alerts, and structured results to visualize reasoning, communication, sensor data, and final user-facing outcomes. They are not the fourth ESP32-S3 role.
+
+This is still an MCU-oriented runtime, not a Linux multi-process agent framework. The Coordinator currently owns the main serial `agent_loop`; cross-node collaboration is implemented through MQTT Mesh commands, Guardian policy gates, structured `OutputMessage`, timeline events, and background automation tasks.
 
 ## Capabilities
 
@@ -14,17 +23,79 @@ The current firmware is the first edge-node phase of the planned LingShu Agent M
 - Serial CLI for diagnostics and local maintenance
 - ReAct-style agent loop with LLM tool use
 - Bounded `spawn_subagent` tool for focused search, weather/time, and SPIFFS file subtasks
+- MQTT Mesh command routing with node/role targets
+- Guardian-gated `policy_check` / `policy_decision` before remote Sensor/Control execution
+- Structured `espagent.output.v1` OutputMessage for Mesh results, local tool results, and final replies
+- Async `mesh_send_command` result reinjection: `async_task_id` first, later OutputMessage injected back into `message_bus`
+- Timeline events for `tool_use`, `tool_result`, `mesh_command_queued`, `mesh_command_result`, `final_reply`, `error`, and Guardian audit
+- Session trace JSONL for tool and async-result history
+- Lightweight Guardian StateBoard exposed through Serial CLI
+- Runtime skill benchmark over `/dev/ttyUSB0-3` for all SPIFFS skill readability, Mesh routing, sandbox, privacy, prompt-injection, workflow, and heap/cache snapshots
 - SPIFFS-backed memory, sessions, skills, and config files
 - Structured weather lookup through Amap WebService, with Nanjing Qixia District as the default location when configured
 - Hardware tools for GPIO, WS2812, servo, MAX98357, AHT10/AHT20, SGP30, BH1750/GY-30, HC-SR05, and environment readings
 - ESP-NOW environment telemetry sender
-- MQTT mesh telemetry/state topics under `espagent/nodes/<node_id>/...`
-- MQTT Mesh command publishing through `mesh_send_command`
+- MQTT state, telemetry, events, dispatch, timeline, alerts, and security topics
+- Automation runtime for delayed workflows and persistent condition-action rules
 - HTTPS OTA app update through the serial CLI
 - Four ESP32-S3 role profiles: `coordinator_agent`, `sensor_agent`, `control_agent`, and `guardian_agent`
 - Wi-Fi onboarding/admin AP under the `ESPAgent-XXXX` network name
 
-Current Mesh boundary: the Coordinator can publish a standard MQTT Mesh command to another node or role, Sensor/Control have narrow whitelisted execution paths, and Guardian performs the first `policy_check` / `policy_decision` gate. OTA is intentionally exposed through Serial CLI first, not as a Feishu/LLM tool.
+Current verified highlights:
+
+- Feishu entry can route common natural-language requests to Sensor or Control without requiring the user to name an MQTT node id.
+- AHT20 on the Sensor role has been verified, with typical readings around `27.x C / 45-46%RH`.
+- Sensor telemetry publishes AHT20 data on `espagent/cube1345/nodes/esp32s3-sensor-01/telemetry`.
+- A humidity rule has been verified end to end: Coordinator automation reads Sensor AHT20 humidity, Guardian allows the action, and Control sets the WS2812 status light.
+- ESP32-P4 display firmware has verified Wi-Fi/MQTT connect and topic subscription; full live UI binding should still be treated as in-progress.
+- OTA is intentionally exposed through Serial CLI first, not as a Feishu/LLM tool.
+
+## Runtime Flow
+
+```text
+Feishu / WebSocket / CLI / Cron / Proactive / Automation
+        |
+        v
+message_bus inbound queue
+        |
+        v
+coordinator agent_loop
+        |
+        v
+LLM ReAct tool use
+        |
+        v
+tool_registry
+        |
+        +--> local tools
+        |
+        +--> mesh_send_command
+                 |
+                 v
+          Guardian policy_check / policy_decision
+                 |
+                 v
+          Sensor or Control role command
+                 |
+                 v
+          structured OutputMessage
+                 |
+                 v
+          async result reinjection + timeline + Feishu/WebSocket reply
+```
+
+The ReAct loop is now a first-version cross-node loop: the Coordinator can reason, call a Mesh tool, wait asynchronously for the remote result, observe the structured OutputMessage, and then produce a user-facing answer.
+
+## Automation Runtime
+
+ESPAgent has a deterministic automation layer for requests that should not depend on a single open LLM turn.
+
+- `automation_create_workflow`: creates one-shot ordered or delayed workflows, such as "turn red now, then blue after 10 seconds".
+- `automation_create_rule`: creates persistent condition-action rules, such as "if humidity is above 40%, set the light red".
+- `automation_list`: lists active workflows and rules.
+- `automation_remove`: removes a workflow or rule.
+
+Rules are stored in `/spiffs/automation.json`. A background `rule_task` scans conditions, while one-shot workflows run in temporary `workflow_task` instances. The current default limits are 8 rules, 8 workflow slots, and 8 steps per workflow.
 
 ## Repository Layout
 
@@ -37,6 +108,7 @@ ESPAgent/
 │   │                           build-time credentials template
 │   ├── app/                    application startup and service orchestration
 │   ├── agent/                  agent loop and system prompt construction
+│   ├── automation/             persistent rules and one-shot workflows
 │   ├── bus/                    FreeRTOS inbound/outbound message queues
 │   ├── cache/                  local runtime cache for prompt fragments
 │   ├── channels/feishu/        Feishu/Lark WebSocket channel
@@ -48,7 +120,7 @@ ESPAgent/
 │   ├── heartbeat/              heartbeat-driven background checks
 │   ├── llm/                    HTTPS LLM provider client and tool-use parser
 │   ├── memory/                 long-term memory and per-chat JSONL sessions
-│   ├── mesh/                   MQTT Mesh command types and protocol validation
+│   ├── mesh/                   MQTT Mesh command, policy, and protocol validation
 │   ├── node/                   node identity, role, capabilities, responsibilities
 │   ├── onboard/                Wi-Fi onboarding/admin portal
 │   ├── ota/                    HTTPS OTA update support
@@ -56,18 +128,30 @@ ESPAgent/
 │   ├── roles/                  coordinator/sensor/control/guardian/display boundaries
 │   ├── sensors/                periodic sensor publishing integrations
 │   ├── skills/                 SPIFFS skill summary loader
+│   ├── time_sync/              SNTP-backed local time support
+│   ├── wifi/                   Wi-Fi connection helpers
 │   └── tools/                  AI-callable tool registry and tool handlers
 ├── spiffs_data/                files bundled into the SPIFFS partition
 │   ├── config/                 SOUL.md and USER.md bootstrap files
 │   ├── memory/                 MEMORY.md and daily notes
 │   └── skills/                 markdown skills loaded at runtime
 ├── docs/                       architecture, setup, and integration notes
+├── tools/                      host-side flash, verification, and test runners
+├── benchmarks/                 benchmark datasets and expected behavior cases
 ├── skills/deploy/              local deployment helper skill and scripts
 ├── scripts/                    host setup/build helper scripts
+├── artifacts/                  generated test logs and summaries, ignored
+├── build*/                     ESP-IDF build output, ignored
 ├── partitions.csv              flash partition table
 ├── sdkconfig.defaults          shared ESP-IDF defaults
 └── sdkconfig.defaults.esp32s3  ESP32-S3-specific defaults
 ```
+
+Detailed placement rules are maintained in
+[`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md). In short: firmware code
+belongs under `main/`, runtime SPIFFS seed files under `spiffs_data/`, host test
+and flashing tools under `tools/`, and generated build/test output under ignored
+`build*/` or `artifacts/` directories.
 
 ## Build
 
@@ -89,6 +173,17 @@ Flash with:
 idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
+For the current four-S3 setup, the recommended order is:
+
+```text
+/dev/ttyUSB0  coordinator_agent
+/dev/ttyUSB1  sensor_agent
+/dev/ttyUSB2  control_agent
+/dev/ttyUSB3  guardian_agent
+```
+
+Use `/dev/ttyUSB0-3` for ESP32-S3 flashing. Do not flash ESP32-S3 role firmware to `/dev/ttyACM*`; the ESP32-P4+C6 display terminal commonly appears as `/dev/ttyACM0` and has its own project.
+
 Serial OTA maintenance commands:
 
 ```text
@@ -98,7 +193,7 @@ ota_update <https_url_to_ESPAgent.bin>
 
 The OTA URL must point directly to an HTTPS app `.bin` that fits the 2MB OTA slot.
 
-OTA is currently a maintenance primitive, not an AI code-generation feature. A developer or CI still builds `ESPAgent.bin`; future Agent-side work should only orchestrate checks, Guardian approval, user confirmation, deployment, reboot observation, and result reporting.
+OTA is currently a maintenance primitive, not an AI code-generation feature. A developer or CI still builds `ESPAgent.bin`; future Agent-side work should only orchestrate version discovery, role matching, Guardian approval, user confirmation, deployment, reboot observation, and result reporting.
 
 ## Configuration
 
@@ -121,14 +216,55 @@ Node identity defaults can be set in `main/espagent_secrets.h`:
 #define ESPAGENT_SECRET_NODE_RESPONSIBILITIES "single-node development profile; can chat, sense, control, publish telemetry, and audit mesh state"
 ```
 
-For a four-ESP32 setup, use the same firmware and assign each board a different node profile: `coordinator_agent`, `sensor_agent`, `control_agent`, and `guardian_agent`.
+For a four-ESP32 setup, use the same codebase and assign each board a different node profile:
+
+```text
+esp32s3-coordinator-01  coordinator_agent  coordinator,communication,llm,dispatch,timeline,alerts
+esp32s3-sensor-01       sensor_agent       sensor,telemetry,environment,air_quality,light,presence
+esp32s3-control-01      control_agent      control,gpio,rgb,servo,relay,actuator
+esp32s3-guardian-01     guardian_agent     guardian,security,policy,privacy,audit,watchdog,stateboard
+```
+
+At the moment, role identity is still mainly a build-time profile. If OTA is used with a firmware image compiled for a different role, the target board's role can change. A later improvement should move role identity into NVS so one OTA image can safely serve all four S3 roles.
+
+## MQTT Mesh Topics
+
+Typical topics under the configured prefix:
+
+```text
+espagent/nodes/<node_id>/state
+espagent/nodes/<node_id>/telemetry
+espagent/nodes/<node_id>/events
+espagent/nodes/<node_id>/command
+espagent/roles/<role>/command
+espagent/agent/dispatch
+espagent/agent/timeline
+espagent/alerts
+espagent/security/policy_check
+espagent/security/decision
+```
+
+The current lab prefix is `espagent/cube1345`, and the temporary public broker used during bring-up is `broker.emqx.io:1883`. That broker is only for development validation. A production deployment should use a private broker with authentication, TLS, ACLs, and topic isolation.
+
+## Current Boundaries
+
+- The Coordinator still uses one main `agent_loop`; the four S3 boards are not four independent full LLM agents.
+- `spawn_subagent` is a bounded local FreeRTOS task, not another physical device. It can use only a small whitelist of non-hardware tools.
+- Sensor and Control execute only whitelisted Mesh commands.
+- Control checks a cached Guardian allow decision before low/medium-risk actuator execution, but a complete command queue, signed commands, manual confirmation queue, and full safety interlock are still next-stage work.
+- Timeline and trace output exist, but full persistent task trees, queryable trace indexes, and watchdog aggregation are not complete yet.
+- ESP32-P4/Android Display Terminals should consume the existing MQTT data stream; not every UI card should be described as fully live until verified on hardware.
 
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Public knowledge base](docs/PUBLIC_KNOWLEDGE_BASE.md)
+- [Project structure](docs/PROJECT_STRUCTURE.md)
 - [LingShu Agent Mesh](docs/LINGSHU_AGENT_MESH.md)
 - [ESP32 role profiles](docs/ESP32_ROLE_PROFILES.md)
+- [Android Agent Mesh handoff](docs/ANDROID_AGENTMESH_HANDOFF.md)
+- [LLM to hardware runtime](docs/LLM_TO_HARDWARE_RUNTIME.md)
+- [Skill benchmark](docs/SKILL_BENCHMARK.md)
 - [Feishu setup](docs/im-integration/FEISHU_SETUP.md)
 - [Wi-Fi onboarding AP](docs/WIFI_ONBOARDING_AP.md)
 - [Tavily setup](docs/tool-setup/TAVILY_SETUP.md)

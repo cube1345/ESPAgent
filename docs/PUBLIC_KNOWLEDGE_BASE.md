@@ -113,7 +113,11 @@ esp32s3-guardian-01     guardian_agent     guardian,security,policy,privacy,audi
 - 联调用 broker 暂为 `broker.emqx.io:1883`，topic prefix 暂为 `espagent/cube1345`；这是调试配置，不是生产配置。
 - `mesh_send_command` 已加入 LLM tool registry，Coordinator 可以把跨节点请求发布为 MQTT Mesh command。
 - Sensor 角色已补充 `read_temperature_humidity` command 白名单：收到命令后可调用 AHT10/AHT20 工具并发布结构化 `espagent.output.v1` OutputMessage 到 events/timeline。
+- 2026-06-18 实测 USB1 `sensor_agent` 上 AHT20 已正确识别并读取，典型读数为 `temperature=27.4 C`、`humidity=45.2%`；Sensor telemetry 已发布到 `espagent/cube1345/nodes/esp32s3-sensor-01/telemetry`，payload 包含 `temp`、`humidity`、`sensor:"AHT20"` 和 `status`。
 - Coordinator 的 `mesh_send_command` 工具现在会先向 Guardian 发起 `policy_check`，收到 `decision=allow` 后才发布真正的 Sensor/Control command；随后在 `require_ack=true` 时等待同一 `command_id` 的 OutputMessage。等待成功时，工具结果会包含 `output_message={...}` 并进入下一轮 LLM 上下文，让跨节点 ReAct 从“只下发命令”推进到“裁决、下发、等待、观察结果、再推理”。
+- Coordinator 已新增 automation runtime：`automation_create_workflow` 用于顺序/延迟动作，`automation_create_rule` 用于持续条件监控，规则持久化到 `/spiffs/automation.json`，由 FreeRTOS `automation` task 后台轮询执行，不依赖当前对话回合持续占用 `agent_loop`。
+- Automation 当前分两条执行路径：条件规则由一个常驻 `rule_task` 串行扫描 `s_rules[]`，多步/延迟任务由每个 workflow 自己启动一个临时 `workflow_task`。默认上限为 8 条规则、8 个 workflow 槽位、每个 workflow 8 步。
+- 2026-06-18 已完成湿度条件自动化验证：USB0 创建 `humidity_percent > 40` 规则，USB1 AHT20 返回湿度约 `46.0%`，USB0 经 Guardian policy 下发 `set_status_light`，USB2 `control_agent` 执行 WS2812 `rgb=(255,0,0)`；测试规则随后已通过 `automation_remove` 删除。
 - Guardian 角色已接入 policy 第一版：启动时声明 policy/privacy/audit/stateboard/watchdog 边界；订阅 `espagent/cube1345/security/policy_check` 后按白名单和安全等级返回 `espagent.policy_decision.v1` 到 `espagent/cube1345/security/decision`；订阅 timeline 后对 `tool_use`、`tool_result`、`mesh_command_queued`、`mesh_command_result`、`final_reply`、`error` 等关键事件生成 `espagent.guardian.audit.v1` 审计事件，错误事件会同步发布到 alerts。
 
 MQTT Mesh topic：
@@ -145,7 +149,7 @@ Subagent 状态：
 - 行为模式参考远程分支：主 Agent 调用工具后创建 `subagent` FreeRTOS task，子任务独立调用 LLM 和工具，完成后通过 semaphore 把结果交回主 Agent。
 - 子代理工具面被严格限制为：`web_search`、`get_weather`、`get_current_time`、`read_file`、`write_file`、`edit_file`、`list_dir`。
 - 子代理不能调用硬件、传感器、GPIO、WS2812、舵机、Mesh command，也不能递归创建子代理。
-- 当前 subagent 是同步等待模式，超时由 `ESPAGENT_SUBAGENT_TIMEOUT_MS` 控制；Mesh command 现在也采用同步等待 OutputMessage 的第一版闭环。后续更合理的 Mesh 版本应演进成 async task_id + `message_bus`/timeline 回注结果。
+- 当前 subagent 仍是同步等待模式，超时由 `ESPAGENT_SUBAGENT_TIMEOUT_MS` 控制；Mesh command 已演进为默认异步 `async_task_id` + 后台等待 OutputMessage + `message_bus`/timeline 回注结果。
 - 2026-06-15 已在 USB0 coordinator 板端完成真实验证：烧录当前固件后启动日志显示 `Registered tool: spawn_subagent`、`Tools JSON built (26 tools)`、`Subagent tools JSON built`；串口执行 `tool_exec spawn_subagent {"task":"Call_get_current_time_and_return_one_sentence"}` 后，子代理完成 LLM tool loop，调用 `get_current_time`，并以 `ESP_OK` 返回当前时间。
 - 2026-06-15 同一 USB0 板端也完成主 `agent_loop` ReAct 验证：串口 `inject_msg system react_test 请调用get_current_time并回复当前时间` 触发 `Tool use iteration 1`，模型调用 `get_current_time({})`，工具返回系统时间后第二轮 LLM 生成最终回复。
 
@@ -156,6 +160,7 @@ Subagent 状态：
 - Sensor 当前承担 sensor sampling、environment/presence monitor、MQTT telemetry 和串口 CLI，不运行 LLM/Feishu。
 - Control 当前承担控制边界、MQTT command 接收、本地执行器工具和 boot servo demo，不运行 LLM/Feishu。
 - Display 当前由 ESP32-P4+C6 和 Android 方向承担；USB3 ESP32-S3 从旧 Display 方案调整为 Guardian。ESP32-P4+C6 工程 `/home/cube/WorkSpace/ESP/lvgl_traffic_control` 已新增真实 LVGL `AgentMesh` 页面和 MQTT timeline/state/telemetry/alerts 订阅，并已烧录到 `/dev/ttyACM0`。当前 P4 板端已确认 Wi-Fi 和 MQTT 订阅成功，四板联动与屏幕动态刷新仍需继续实机验证。
+- P4 已订阅 `nodes/+/telemetry`，因此 AHT20 温湿度 telemetry 能进入 Display Terminal 数据流；但现有 Environment Monitor 温湿度卡片仍需进一步做动态绑定，当前不能夸大为所有 UI 卡片都已实时刷新。
 - Android Display Agent 交接方案已新增到 `docs/ANDROID_AGENTMESH_HANDOFF.md`：定位为 ESP32-P4+C6 的移动增强版展示终端，使用 Java Android + MQTT 订阅 `timeline/state/telemetry/alerts`，在本地维护类似 Stage `StateBoard` 的状态源，用于展示 AI 推理、Mesh 通信、节点状态、传感器数据和最终用户结果。
 - 当前状态不是硬件资源完全拉满，而是按角色裁剪服务并保留较大 RAM/PSRAM/Flash 余量，便于继续加入 Sensor cache、Control command queue/safety interlock、Display timeline/UI。
 
@@ -218,16 +223,15 @@ Feishu WebSocket 稳定性状态：
 当前限制：
 
 - 简单自然语言任务已经能自动转换成正式 Mesh command：普通温湿度读取和远程/控制板 WS2812 状态灯颜色请求已验证。复杂跨节点任务仍需要继续通过 LLM/tool planning 转换。
-- 远端结果关联已有同步等待第一版；还没有 async task_id、message_bus 回注和持久化 trace。
-- 基础 `tool_use`/`tool_result`/`mesh_command_queued`/结构化 `OutputMessage`/Guardian audit/`final_reply` timeline 已实现；更完整的任务拆解事件、持久化 trace 和 StateBoard 聚合仍待补齐。
+- 远端结果关联已有默认异步回注第一版：`mesh_send_command` 返回 `async_task_id`，后台等待 OutputMessage 后注入内部消息。
+- 基础 `tool_use`/`tool_result`/`mesh_command_queued`/结构化 `OutputMessage`/Guardian audit/`final_reply` timeline 已实现；`trace_*.jsonl` 和 Guardian `stateboard_show` 已落地，更完整的任务拆解树、trace 查询和 watchdog 聚合仍待补齐。
 - 还没有 role-based tool exposure，Coordinator 仍能看到较多本地工具。
 - MQTT broker 不可达时，事件只能在本地队列中等待，无法被其他节点看到。
 - SNTP/天气修复已通过构建；天气真实 Feishu 场景仍需单独板端验证。
 
 下一步：
 
-- 将同步等待 OutputMessage 演进为 async task_id + message_bus 回注，避免长时间阻塞 agent loop。
-- 让 Control 侧强制校验 Guardian decision，防止直接向 Control topic 伪造命令。
+- 补 command queue、人工确认和硬件 safety interlock，把当前 Guardian decision 校验扩展成完整执行闸门。
 - 把天气、时间、主动提醒结果同步到 timeline，供 ESP32-P4/Android 展示。
 
 四板压力验证：
@@ -273,12 +277,13 @@ Feishu WebSocket 稳定性状态：
 - 环境监测任务已存在，能读取综合环境数据并通过 ESP-NOW 发送。
 - MQTT telemetry/state/event 框架已存在。
 - MQTT 收到 `read_temperature_humidity` command 时，Sensor 角色可执行 AHT10/AHT20 温湿度读取，并发布 `mesh_command_result`。
+- 2026-06-18 USB1 AHT20 已实测通过，I2C 地址 `0x38`，典型读数 `27.4 C / 45.2%RH`；Sensor Agent 的周期 telemetry 已改为优先发布 AHT20 温湿度 JSON，而不是继续依赖未接入的 DHT22/MH-Z19。
 
 当前限制：
 
 - `sensor_mqtt.c` 仍混合了通用 MQTT transport 和 DHT22/MH-Z19 telemetry，后续应拆为 `mesh_mqtt` 与 `sensor_telemetry`。
 - 传感器数据还没有统一 sensor cache、质量标记、采样时间戳和异常阈值规则。
-- Sensor 节点当前只对白名单 `read_temperature_humidity` command 做直接响应，其它 Mesh command 仍不执行。
+- Sensor 节点当前只对白名单 `read_temperature_humidity` command 做直接响应，其它 Mesh command 仍不执行；AHT20 正常接线后已不再把“未找到温湿度设备”视为当前主要问题。
 
 下一步：
 
@@ -369,6 +374,7 @@ Feishu WebSocket 稳定性状态：
 - P4 侧为避免外网 component manager 依赖，没有使用 `esp-mqtt`，而是沿用与 S3 类似的裸 TCP MQTT 订阅器。
 - P4 工程已用当前 `/home/cube/WorkSpace/ESP/esp-idf` v6.1-dev 构建通过，输出 `build/lvgl_template.bin`，大小 `0x150910`，8MB app 分区剩余约 84%。
 - P4 固件已烧录到 `/dev/ttyACM0`；最终串口日志显示 Wi-Fi connected，IP `10.176.79.81`，并已连接 `broker.emqx.io:1883`，订阅 `agent/timeline`、`nodes/+/state`、`nodes/+/telemetry`、`alerts`，且 `agent/timeline` 收到 `SUBACK id=1 code=0x00`。主机侧 broker loopback 已确认 topic 可转发；但一次 host-published timeline 测试消息没有在 P4 串口收包日志中出现，因此 P4 收包日志和屏幕 timeline 动态刷新还需要结合实时 S3 流量继续验证。
+- 2026-06-18 S3 侧已经能持续发布 AHT20 telemetry，因此 P4/Android Display 的下一步重点从“有没有数据源”转为“UI 卡片和 timeline 是否正确绑定这条实时数据流”。
 
 当前限制：
 
@@ -497,9 +503,9 @@ typedef struct {
 
 当前执行状态：
 
-- 已完成：`mesh_types`、`mesh_protocol`、`roles/*_node` 骨架、role-gated startup、MQTT command dry-run validation。
-- 下一步：拆分 `sensor_mqtt.c` 为通用 `mesh_mqtt` 与 sensor telemetry service。
-- 暂不开放：真实远程 command 执行，必须等 command queue、safety interlock、审计和 timeline event 完成后再接。
+- 已完成：`mesh_types`、`mesh_protocol`、`roles/*_node` 骨架、role-gated startup、MQTT command validation、Sensor/Control 低中风险白名单执行、Guardian policy gate 和 OutputMessage result。
+- 下一步：拆分 `sensor_mqtt.c` 为通用 `mesh_mqtt` 与 sensor telemetry service，并补 command queue、safety interlock、actuator state、人工确认和更完整审计。
+- 当前只开放受控白名单动作；不要把任意 MQTT command 直接接到硬件工具。
 
 ## 主要目录
 
@@ -508,14 +514,32 @@ ESPAgent/
 ├── main/                       ESP-IDF application component
 ├── spiffs_data/                SPIFFS 初始文件
 ├── docs/                       架构、方案、集成、路线图
+├── tools/                      主机侧烧录、验证、压力测试和 benchmark runner
+├── benchmarks/                 benchmark 数据集和期望行为用例
 ├── scripts/                    构建和环境脚本
 ├── skills/deploy/              部署辅助 skill
+├── artifacts/                  测试日志和运行摘要，生成物，不进源码管理
+├── build*/                     ESP-IDF 构建产物，生成物，不进源码管理
 ├── partitions.csv              Flash 分区表
 ├── sdkconfig.defaults          公共 ESP-IDF 默认配置
 ├── sdkconfig.defaults.esp32s3  ESP32-S3 默认配置
 ├── public_knowledge.md         AI 工作协议和进度日志
 └── README.md                   项目入口说明
 ```
+
+目录治理规则：
+
+- 固件源码只放在 `main/`，由 `main/CMakeLists.txt` 显式加入编译。
+- SPIFFS 初始文件只放在 `spiffs_data/`，由顶层 `CMakeLists.txt` 打包。
+- 串口烧录、四角色验证、飞书压力测试、skills benchmark 等主机工具放在 `tools/`。
+- benchmark 数据集放在 `benchmarks/`，runner 放在 `tools/`。
+- `artifacts/`、`build*/`、`tmp*/`、`__pycache__/`、`*.bin`、`*.elf`、`*.map`、`*.log` 都是生成物，已由 `.gitignore` 忽略。
+- 详细目录职责和新增文件放置规则见 `docs/PROJECT_STRUCTURE.md`。
+
+当前结构优化边界：
+
+- 现在不推荐拆成四个 ESP-IDF 工程；继续使用一个固件工程，通过 node profile 区分 Coordinator、Sensor、Control、Guardian。
+- 未来真正值得拆的是 `main/sensors/sensor_mqtt.c`：它目前同时承担 MQTT lifecycle、Mesh command routing、telemetry、Guardian decision cache、OutputMessage 等职责。推荐后续拆为 `main/mesh/mesh_mqtt_client.*`、`main/mesh/mesh_command_router.*`、`main/mesh/mesh_policy_cache.*` 和 `main/sensors/sensor_telemetry.*`。
 
 ## main/ 文件分工
 
@@ -579,11 +603,13 @@ ESPAgent/
 | `main/tools/tool_registry.c/.h` | 工具注册表、JSON schema 构建、按名字分发执行。 |
 | `main/tools/tool_subagent.c/.h` | `spawn_subagent` 工具：创建受限 FreeRTOS 子代理，执行独立短 ReAct loop 后同步返回结果。 |
 | `main/tools/gpio_policy.c/.h` | GPIO allowlist 和安全策略。 |
-| `main/sensors/sensor_mqtt.c/.h` | MQTT state/event/telemetry 发布，订阅 node/role command、dispatch、timeline、alerts、policy_check/decision；缓存 OutputMessage 和 policy decision，供 Coordinator 同步等待。 |
+| `main/sensors/sensor_mqtt.c/.h` | MQTT state/event/telemetry 发布，订阅 node/role command、dispatch、timeline、alerts、policy_check/decision；缓存 OutputMessage 和 policy decision，供 Coordinator 异步回注与 Control 本地校验使用。 |
 | `main/espnow/espnow_sender.c/.h` | ESP-NOW 广播文本遥测。 |
 | `main/wifi/wifi_manager.c/.h` | Wi-Fi STA 生命周期、事件处理、重连退避。 |
 | `main/proxy/http_proxy.c/.h` | HTTP CONNECT 代理，用于 Feishu/LLM/search 等 HTTPS 出口。 |
 | `main/ota/ota_manager.c/.h` | HTTPS OTA 更新封装；当前通过 Serial CLI 的 `ota_info` / `ota_update` 使用。 |
+| `benchmarks/skills/espagent_skill_benchmark.jsonl` | ESP32 运行时 skill benchmark 数据集，用 JSONL 描述 skill loading、Mesh routing、sandbox、privacy、prompt-injection 和 workflow 验证用例。 |
+| `tools/benchmark_skills_usb0_3.py` | ESP32-S3 四板 benchmark runner，默认只使用 `/dev/ttyUSB0-3`，通过串口 CLI / `inject_msg` 执行用例并基于日志打分。 |
 
 ## SPIFFS 初始文件
 
@@ -604,6 +630,19 @@ ESPAgent/
 - `mqtt-mesh-operations.md`: MQTT Mesh topic、command/result、开发与生产安全边界。
 - `mcu-edge-ai-boundaries.md`: MCU 端 AI 能力边界，明确当前不是 ESP32-S3 本地 LLM。
 - `mesh-resource-planning.md`: 四块 ESP32-S3 的资源使用方向和后续补强路径。
+- `user-profile-adaptation.md`: 用户画像慢速更新规则，记录偏好、习惯、环境舒适阈值、证据、置信度和冲突修正策略。
+- `agent-sandbox-permissions.md`: Agent 行为沙箱、最小权限、风险分级、dry-run、TTL、确认和硬件互锁规则。
+- `privacy-data-minimization.md`: 家居隐私数据分级、本地脱敏、最小上下文、MQTT/Display/Memory 隐私边界。
+- `tool-integrity-and-prompt-injection.md`: 防 prompt injection、工具输出不可信、工具完整性、外部内容不得覆盖安全策略。
+
+当前 skills 的有效性不只靠人工阅读判断，已新增 ESP32 平台 benchmark：
+
+- 静态可用性：通过 `skill_list` / `skill_show` 确认 SPIFFS skills 被加载并可读。
+- 全量 skill 可读性：runner 会自动为 `spiffs_data/skills/*.md` 生成 `skill_show` 用例，确保每个运行时 skill 都能从 SPIFFS 被读取。
+- 固件/运行时策略：通过行为用例验证 sandbox 对受保护路径、高风险动作、确认参数的拦截。
+- 行为级 Agent 验证：通过 `inject_msg` 进入 Coordinator 的 ReAct loop，检查自然语言是否触发 Mesh routing、Guardian policy、OutputMessage、workflow、privacy 和 prompt-injection 相关行为。
+- 运行资源快照：benchmark 在用例前后采集四块 S3 的 `heap_info` 和 `cache_stats`，同时记录 crash pattern，便于判断技能验证期间的资源压力。
+- benchmark 数据集在 `benchmarks/skills/espagent_skill_benchmark.jsonl`，runner 为 `tools/benchmark_skills_usb0_3.py`，使用说明见 `docs/SKILL_BENCHMARK.md`。
 
 运行期还会使用：
 
@@ -711,7 +750,10 @@ OpenAI-compatible 请求会再转换成 `{"type":"function","function":{...}}` �
   "trace_id": "optional string",
   "ttl_ms": "1000..30000",
   "safety_level": "0 low | 1 medium | 2 high",
-  "require_ack": "boolean"
+  "require_ack": "boolean",
+  "async": "boolean, default true",
+  "reply_channel": "optional channel for async callback",
+  "reply_chat_id": "optional chat id for async callback"
 }
 ```
 
@@ -719,7 +761,7 @@ OpenAI-compatible 请求会再转换成 `{"type":"function","function":{...}}` �
 
 - `action` 必填。
 - `target_node` 存在时优先按节点下发；否则按 `target_role` 下发。
-- `require_ack` 默认 true，Coordinator 会等待同一 `command_id` 的 OutputMessage。
+- `require_ack` 默认 true；`async` 默认 true。Coordinator 会立即返回 `async_task_id`，后台 task 等待同一 `command_id` 的 OutputMessage，再把结果作为内部消息回注到 `message_bus`。
 - 当前目标角色只开放 `sensor_agent` 和 `control_agent`，避免 LLM 任意向 Guardian 或其它角色下发动作。
 - Coordinator 上的 `read_temperature_humidity`、`ws2812_set`、`set_status_light`、`servo_write`、`gpio_write` 会在非 `local=true` 时自动路由到 Mesh，避免用户必须手写 MQTT node id。
 
@@ -735,17 +777,23 @@ OpenAI-compatible 请求会再转换成 `{"type":"function","function":{...}}` �
 }
 ```
 
-对于 `mesh_send_command`，如果远端 OutputMessage 等待成功，`content` 里会包含：
+对于 `mesh_send_command`，默认异步返回会包含：
 
 ```text
-OK: mesh command completed command_id=<id> output_message={...espagent.output.v1...}
+OK: queued MQTT mesh command action=<action> ... async_task_id=mesh-task-<command_id>; result will be injected when OutputMessage arrives
 ```
 
-这让下一轮 LLM 能“观察”远端节点真实执行结果，而不是只知道 MQTT 已发布。
+后台等待 task 收到远端 OutputMessage 后，会向原 `reply_channel` / `reply_chat_id` 注入内部消息：
+
+```text
+Internal async Mesh result. task_id=<id> command_id=<id> action=<action> output_message={...espagent.output.v1...}
+```
+
+这让下一轮 LLM 能在独立回合“观察”远端节点真实执行结果，而不是只知道 MQTT 已发布。
 
 #### OutputMessage v1
 
-OutputMessage 是 ESP32 节点之间的结构化结果消息，不是 LLM provider 的原生 message。当前由 Sensor/Control 在执行 Mesh command 后发布，schema 为 `espagent.output.v1`。
+OutputMessage 是 ESP32 节点之间的结构化结果消息，不是 LLM provider 的原生 message。当前由 Sensor/Control 在执行 Mesh command 后发布，也覆盖 Coordinator 本地工具结果和最终回复，schema 为 `espagent.output.v1`。
 
 当前字段：
 
@@ -796,8 +844,8 @@ OutputMessage 是 ESP32 节点之间的结构化结果消息，不是 LLM provid
 缓存与等待：
 
 - `sensor_mqtt` 收到 `schema=espagent.output.v1`、`type=output` 或 `event=mesh_command_result` 时，会按 `command_id` 缓存。
-- Coordinator 的 `mesh_send_command` 在 `require_ack=true` 时调用等待函数轮询缓存。
-- 等待成功后，OutputMessage 原文作为 tool result 的一部分回灌给 LLM。
+- Coordinator 的 `mesh_send_command` 在 `require_ack=true` 且 `async=true` 时启动后台等待 task；等待成功后，OutputMessage 原文通过内部消息回注给 `agent_loop`，由 LLM 总结后发给用户。
+- 本地普通工具和 `final_reply` 也会发布 OutputMessage，方便 ESP32-P4/Android 按统一 schema 展示工具结果与用户可见结论。
 
 #### Guardian policy gate
 
@@ -825,11 +873,12 @@ Guardian 返回 `espagent.policy_decision.v1`，当前 Coordinator 只在 `decis
 
 - Coordinator 侧已经强制先等 Guardian decision。
 - Guardian 当前是第一版白名单/安全等级裁决和 metadata-only audit。
-- Control 侧还没有强制验证 Guardian decision，所以直接伪造 Control topic 的防护仍需后续 command queue / local interlock 补齐。
+- Control 侧已在本机缓存中校验对应 `command_id` 的 Guardian allow decision，action/target_role/target_node 不匹配或无 allow 时拒绝本地执行。
+- 直接伪造 Control topic 的防护已经有第一层本地互锁；后续仍需 command queue、人工确认、签名/认证和更完整的 safety interlock。
 
 #### 跨节点 ReAct 闭环
 
-当前跨节点 ReAct 闭环已经达到第一版同步形态：
+当前跨节点 ReAct 闭环已经达到第一版异步回注形态：
 
 ```text
 用户自然语言
@@ -840,20 +889,20 @@ Guardian 返回 `espagent.policy_decision.v1`，当前 Coordinator 只在 `decis
   -> MQTT Mesh command
   -> Sensor/Control 执行
   -> OutputMessage espagent.output.v1
-  -> Coordinator 等待 command_id
-  -> tool_result(output_message=...)
-  -> LLM 再推理
-  -> final_reply
+  -> Coordinator 后台等待 task 匹配 command_id
+  -> message_bus 注入 Internal async Mesh result
+  -> agent_loop 触发 LLM 再推理
+  -> final_reply / OutputMessage
 ```
 
 这说明项目已经不是“只发 MQTT 命令”，而是具备“推理 -> 执行 -> 观察结果 -> 再推理”的 ReAct 闭环雏形。
 
 当前仍不是完美闭环：
 
-- 同步等待会阻塞当前 agent loop，后续应演进为 async task_id + message_bus 回注。
-- OutputMessage 主要覆盖跨节点 Mesh 结果，普通本地工具和最终回复还没有统一成 OutputMessage schema。
-- session 当前只保存用户消息和最终回复，不持久化完整 tool_use/tool_result/OutputMessage trace。
-- timeline 已有基础结构化事件，但还没有完整任务拆解树和可查询 StateBoard。
+- 仍是单 `agent_loop` 串行处理用户回合和内部回注，不是独立多 LLM Agent 进程。
+- session 已有 `trace_*.jsonl` 保存 tool_use/tool_result/final_reply/async_result_input，但还没有完整任务拆解树、可查询 StateBoard API 和 trace 索引。
+- timeline 已有基础结构化事件和 Guardian StateBoard，但还没有持久化 trace 查询、任务树聚合、人工确认队列和 watchdog 聚合。
+- Control 已做本地 Guardian decision 校验，但还缺 command queue、签名/认证、人工确认和硬件 safety interlock。
 
 ### 已注册工具
 
@@ -875,6 +924,21 @@ Guardian 返回 `espagent.policy_decision.v1`，当前 Coordinator 只在 `decis
 | `sgp30_read_air_quality` / `read_air_quality` | SGP30 空气质量 eCO2/TVOC。 |
 | `read_light_level` | BH1750/GY-30 光照 lux。 |
 | `cron_add` / `cron_list` / `cron_remove` | 定时任务管理。 |
+| `automation_create_workflow` | 创建并启动确定性多步工作流，适合“先红色，等 10 秒，再蓝色”这类顺序/延迟动作。 |
+| `automation_create_rule` | 创建持久化条件动作规则，适合“湿度低于阈值就开灯/打开加湿器”这类后台监控。 |
+| `automation_list` / `automation_remove` | 查看或删除 workflow/rule。 |
+
+### Agent Sandbox
+
+ESP32-S3 上不能实现 Linux/Docker 容器，但当前固件已经加入第一版 capability sandbox：
+
+- 新增 `main/tools/tool_sandbox.c/.h`。
+- `tool_registry_execute()` 在执行任何工具前先调用 `tool_sandbox_check()`；`tool_mesh_send_command_execute()` 自身也会调用同一检查，避免 automation runtime 直接调用 Mesh 工具时绕过沙箱。
+- 沙箱按工具风险分为 `read_only`、`low_control`、`medium_control`、`high_control`、`privacy`、`system`。
+- 沙箱会检查当前 role/capability、受保护路径、Mesh TTL/safety/action、automation interval/cooldown、音频时长/音量，以及高影响动作是否带 `confirmed=true`。
+- `write_file` / `edit_file` 写 `/spiffs/config`、secrets 相关路径会被拒绝；修改 `/spiffs/skills` 需要显式 `confirmed=true`。
+- `automation_create_rule` 被视为高影响持久动作，默认需要 `confirmed=true`，避免 LLM 在没有用户确认时创建长期后台规则。
+- 该 sandbox 不是替代 Guardian，而是 Guardian 前面的本地确定性工具边界；后续还应继续补人工确认 token、命令队列签名和更细的 per-tool capability token。
 
 ### 硬件能力
 
@@ -891,6 +955,8 @@ Guardian 返回 `espagent.policy_decision.v1`，当前 Coordinator 只在 `decis
 ### 主动性
 
 - `cron_add` 支持 recurring、one-shot、daily。
+- `automation_create_rule` 支持把温湿度阈值联动注册为后台默认任务，规则存入 `/spiffs/automation.json`，即使当前对话切换到其它任务，automation task 仍会按 interval/cooldown 继续监控和触发。
+- `automation_create_workflow` 支持多个一次性顺序/延迟任务；每个 workflow 创建独立临时 `workflow_task`，执行完成后释放，不属于重启恢复型持久任务。
 - `proactive_service` 可周期性触发自检，必要时主动发消息。
 - 天气主动提醒应优先使用 `get_weather`。
 - 如果 LLM 返回 `PROACTIVE_NO_MESSAGE`，proactive turn 不打扰用户。
@@ -925,7 +991,7 @@ Flash 配置为 16MB，自定义分区表：
 | `nvs` | 24KB | Wi-Fi、LLM、Feishu、搜索、proactive、Amap 等 NVS 配置。 |
 | `ota_0` | 2MB | OTA app slot A。 |
 | `ota_1` | 2MB | OTA app slot B。 |
-| `spiffs` | 约 11.8MB | memory、sessions、skills、cron、config 文件。 |
+| `spiffs` | 约 11.8MB | memory、sessions、skills、cron、automation、config 文件。 |
 | `coredump` | 64KB | 预留 coredump，当前 sdkconfig 禁用 flash coredump。 |
 
 最近构建结果：
@@ -953,6 +1019,7 @@ OTA 状态：
 - `serial_cli`: Core 0，串口 REPL。
 - `cron`: 定时任务轮询。
 - `proactive`: 主动检查。
+- `automation`: Core 0，后台执行持久化条件规则，周期读取 Sensor 并触发 Control。
 - `sensor_mqtt`: MQTT state/event/telemetry。
 - ESP-IDF 内部 Wi-Fi/httpd/TLS 任务。
 
@@ -978,6 +1045,8 @@ OTA 状态：
 - prompt 安全边界和 execution-side tool guard。
 - SPIFFS memory、daily notes、sessions、skills。
 - Cron daily proactive 和 periodic proactive service。
+- Automation runtime：`automation_create_workflow` 支持顺序/延迟 Mesh 动作，`automation_create_rule` 支持持久化条件联动，`automation_list`/`automation_remove` 支持查询和删除。
+- Automation 并发边界已明确：`rule_task` 只负责条件规则，所有规则在一个后台 task 中串行轮询；workflow 由独立 `workflow_task` 执行，当前不做重启恢复，且运行中 workflow 的强制取消能力还需要补。
 - 反问承接的启发式上下文提示。
 - Agent Mesh Phase 1：node identity、capabilities、responsibilities、MQTT state/telemetry/event、node/role command topic。
 - 四 ESP32 role profile 文档：coordinator、sensor、control、guardian。
@@ -989,11 +1058,19 @@ OTA 状态：
 - Sensor 角色已支持白名单 `read_temperature_humidity` Mesh command，并将 AHT10/AHT20 执行结果发布为 `mesh_command_result` 到本节点 events 和全局 timeline。
 - Control 角色已支持 WS2812/status-light 白名单 Mesh command，并将执行结果发布为 `mesh_command_result` 到本节点 events 和全局 timeline。
 - S3 timeline 已补齐基础结构化事件流：`tool_use`、`tool_result`、`mesh_command_queued`、`mesh_command_result`、`final_reply` 和 error 会发布到 `espagent/cube1345/agent/timeline`，供 P4/Android/Display Agent 观察。
-- 2026-06-17 development 分支推进 Guardian + OutputMessage + policy gate：USB3 推荐改为 `esp32s3-guardian-01` / `guardian_agent`；Coordinator `mesh_send_command` 下发前先发布 `schema=espagent.policy_check.v1`，Guardian 返回 `schema=espagent.policy_decision.v1` 后才继续；下游 Mesh 执行结果升级为 `schema=espagent.output.v1`；Coordinator 可同步等待远端 OutputMessage 并把结构化结果回灌给 LLM；Guardian 会对关键 timeline 事件发布 `schema=espagent.guardian.audit.v1` 审计事件。
+- 2026-06-17 development 分支推进 Guardian + OutputMessage + policy gate：USB3 推荐改为 `esp32s3-guardian-01` / `guardian_agent`；Coordinator `mesh_send_command` 下发前先发布 `schema=espagent.policy_check.v1`，Guardian 返回 `schema=espagent.policy_decision.v1` 后才继续；下游 Mesh 执行结果升级为 `schema=espagent.output.v1`；Coordinator 默认异步等待远端 OutputMessage 并通过内部消息回注给 LLM；Guardian 会对关键 timeline 事件发布 `schema=espagent.guardian.audit.v1` 审计事件。
+- 2026-06-17 已完成闭环增强第一版：`mesh_send_command` 默认异步，返回 `async_task_id` 后由后台 task 等待 OutputMessage 并通过 `message_bus` 回注；本地普通工具和最终回复也发布 `espagent.output.v1`；session 新增 `trace_*.jsonl` 记录 tool_use/tool_result/final_reply/async_result_input；Guardian StateBoard 可通过 `stateboard_show` 查询；Control 侧已强制校验本机缓存的 Guardian allow decision。
+- 2026-06-17 已完成 USB0-USB3 四板验证：`tools/flash_roles_usb0_3.sh` 依次烧录 Coordinator/Sensor/Control/Guardian；`tools/stress_mesh_usb0_3.py --rounds 3 --interval 1.5 --settle 25 --quiet` 通过，6/6 command queued，Sensor 3/3，Control 3/3，Guardian policy 6/6，audit 18，无 crash；`stateboard_show` 在 USB3 返回最近 policy_decision 列表。
+- 2026-06-17 已完成 Feishu 真实入口验证：`tools/stress_feishu_usb0_3.py --rounds 1 --interval 35 --settle 80 --quiet` 通过，飞书发送 2/2，异步 OutputMessage 回注 2/2，Sensor 1/1，Control 1/1，最终 Feishu 回复 4 次，无 crash。当时 Sensor 读温湿度返回 AHT10 未找到，这是当时硬件/接线状态，不是 MQTT Mesh 链路故障。
+- 2026-06-18 已完成 AHT20 实物验证：USB1 `esp32s3-sensor-01` 识别 AHT20，读数恢复到 `27.x C / 45-46%RH`；`read_temperature_humidity` 和 Sensor MQTT telemetry 均优先使用 AHT20 数据，topic 为 `espagent/cube1345/nodes/esp32s3-sensor-01/telemetry`。
+- 2026-06-18 已完成湿度条件自动化验证：创建 `humidity_percent > 40` 的 `automation_create_rule`，后台 `automation` task 周期读取 USB1 AHT20，触发 USB2 `control_agent` 执行 `set_status_light`，串口确认 WS2812 GPIO48 输出红色 `rgb=(255,0,0)`；验证后测试规则已删除。
+- 2026-06-18 已修复 automation task 栈溢出：`ESPAGENT_AUTOMATION_STACK` 提升到 `12 * 1024`，`automation_engine_start()` 创建 `automation` task 时使用该配置。
 - 2026-06-17 已新增 OTA 固件升级能力：`ota_manager` 正式参与构建，串口 CLI 支持 `ota_info` 查看 OTA 分区，`ota_update <https_url_to_ESPAgent.bin>` 从 HTTPS app bin 更新 inactive OTA slot 并成功后重启。该能力当前仅用于本地维护，不进入 LLM tool registry。
 - OTA 的 Agent 化规划已明确：不是让 ESP32 Agent 生成代码，而是把 OTA 作为多 Agent 运维闭环，由 Coordinator 发现/调度、Guardian 审批、安全确认、目标节点执行、P4/Android 展示进度和结果。
 - ESP32-P4+C6 显示端已在 `/home/cube/WorkSpace/ESP/lvgl_traffic_control` 中实现基础 Display Terminal：新增 LVGL `AgentMesh` tab、裸 TCP MQTT 订阅、事件队列、内存 timeline buffer、节点状态卡和最终结果显示；P4 构建通过并已烧录到 `/dev/ttyACM0`，Wi-Fi/MQTT connect/subscribe 已验证，实时收包和屏幕 timeline 实机验证仍需继续。
 - 新增 Agent Mesh / MCU edge AI 运行时 skills：`agent-mesh-coordination.md`、`mqtt-mesh-operations.md`、`mcu-edge-ai-boundaries.md`、`mesh-resource-planning.md`。这些文件把联网调研得到的边界固化进运行时 prompt：角色化 Agent Mesh 调度、MQTT pub/sub 协作、MCU 端 TinyML/小模型推理方向、以及“当前 ESP32-S3 不运行本地完整 LLM”的能力边界。
+- 2026-06-19 已根据 OWASP LLM Top 10、NIST AI RMF、MCP/Agent 工具安全和 Agentic AI 安全资料补充三类安全运行时 skills：`agent-sandbox-permissions.md` 约束工具权限、风险分级、dry-run、TTL 和硬件互锁；`privacy-data-minimization.md` 约束家居隐私数据分级、本地脱敏、最小上下文和 MQTT/Display/Memory 边界；`tool-integrity-and-prompt-injection.md` 约束外部内容作为数据而非指令，防止 prompt injection、tool poisoning 和工具输出越权。
+- 2026-06-19 已完善 ESP32 平台 skills benchmark：`benchmarks/skills/espagent_skill_benchmark.jsonl` 定义运行时行为用例，`tools/benchmark_skills_usb0_3.py` 负责 `/dev/ttyUSB0-3` 四板串口执行、role 检查、自动生成全量 SPIFFS skill 可读性用例、剔除输入回显后的日志打分、资源快照和 artifact 输出；当前支持离线 `--validate-only` / `--list-cases`，也支持板端 skill loading、Mesh routing、sandbox、privacy、prompt-injection、workflow 和全量 skill 文件读取测试。本轮完整四板 run `fixed_full_20260619_210709` 为 23/24，唯一失败来自 prompt-injection `must_not` 规则过宽；修正后单项 run `fixed_prompt_20260619_212052` 为 1/1，串口确认无 `read_file` 执行、无 memory 泄露。
 - Feishu 通信板时间同步已补齐：Wi-Fi 连接后启动 SNTP 校时，`get_current_time` 不再优先依赖 Google Date 头；天气工具仍使用高德 `get_weather`，默认南京市栖霞区。
 - 本地私有配置当前已设置为 Feishu/LLM 入口板：`esp32s3-coordinator-01` / `coordinator_agent` / `coordinator,communication,llm,dispatch,timeline,alerts`。
 - 已烧录 coordinator 固件到 `/dev/ttyUSB0`，目标 ESP32-S3 MAC 为 `14:c1:9f:2d:76:20`；串口日志确认 Feishu、LLM、agent_loop 和 coordinator role 均启动，本地 sensor monitor 与 boot servo demo 已按角色跳过。
@@ -1013,14 +1090,15 @@ OTA 状态：
 ## 当前限制
 
 - 当前 Coordinator 仍是单 ESP32-S3 的单 `agent_loop`，不是多个独立 LLM Agent 进程；四板协作主要通过 MQTT Mesh command、OutputMessage 和 timeline 完成。
-- MQTT command 现在已做基础 schema/目标校验；Sensor `read_temperature_humidity` 和 Control WS2812/status-light 已有白名单执行路径，其它 dispatch 仍只打印日志，不执行硬件动作。
-- Sensor 角色目前只有 `read_temperature_humidity` 白名单执行路径；Control 角色目前只开放 WS2812/status-light 这类低风险白名单执行路径。
-- 还没有 MQTT command queue、人工确认和完整 safety interlock；目前 Guardian 已经能对 Coordinator 发起的 Mesh command 做同步 allow/deny，但 Control 侧尚未强制验证 decision，因此直接伪造 Control topic 仍需要后续本地互锁来防护。
+- MQTT command 现在已做基础 schema/目标校验；Sensor `read_temperature_humidity` 和 Control `set_status_light`、`ws2812_set`、`servo_write`、`gpio_write` 已有白名单执行路径。
+- Sensor 角色目前主要开放 `read_temperature_humidity` Mesh 执行路径；Control 角色开放低/中风险白名单执行路径，高风险仍应进入后续人工确认和 safety interlock。
+- 还没有完整 MQTT command queue、人工确认、签名认证和 safety interlock；目前 Guardian 已经能对 Coordinator 发起的 Mesh command 做 allow/deny，Control 侧也会本地校验 Guardian allow decision，但仍不是最终安全系统。
 - 还没有根据 role 自动裁剪工具列表。
 - Coordinator 现在会把 Feishu 入站广播到 `agent/dispatch`，并且能把普通温湿度读取、远程/控制板状态灯颜色请求转成正式 Mesh command；复杂自然语言任务的通用 Mesh planning 仍未完成。
-- timeline topic 已有 Feishu inbound/outbound、基础 ReAct 工具调用/结果、policy_check/policy_decision、Mesh 下发/结构化 OutputMessage、Guardian audit 和最终回复事件；任务拆解粒度、持久化和 StateBoard 聚合还不完整。
+- Automation 已能覆盖顺序/延迟动作和温湿度条件联动，但自然语言暂停/恢复/删除默认任务、规则状态面板、更复杂的多传感器条件表达式、workflow 持久化恢复和运行中 workflow 取消还没有完善。
+- timeline topic 已有 Feishu inbound/outbound、基础 ReAct 工具调用/结果、policy_check/policy_decision、Mesh 下发/结构化 OutputMessage、Guardian audit、StateBoard 更新和最终回复事件；任务拆解树、持久化查询和 watchdog 聚合还不完整。
 - Memory 写入依赖模型主动调用文件工具，没有固件侧强制 consolidation。
-- session 只保存最终对话，不保存完整 tool_use/tool_result 轨迹。
+- session 已新增 `trace_*.jsonl` 保存 tool_use/tool_result/final_reply/async_result_input；还缺 trace 索引、跨节点关联查询和压缩归档。
 - system prompt 仍集中在 C 字符串中，后续可以拆成 SPIFFS prompt fragments。
 - NVS 只有 24KB，后续如果存节点表、证书或更多运行时配置，建议扩容。
 - 本地工作区 `.git` 在当前工具环境里是只读 tmpfs 占位，普通 `git status` 不可用；当前私有仓库推送使用 `/tmp/ESP32_AgentMesh.git` 作为临时 Git 元数据目录完成。
@@ -1029,9 +1107,8 @@ OTA 状态：
 
 ### P0
 
-- 把当前同步等待 OutputMessage 扩展为异步 task_id + message_bus 回注，避免长时间阻塞 Coordinator agent loop。
-- 让 Control 侧强制校验 Guardian decision，防止直接向 Control topic 伪造命令。
 - 将非 sensor 白名单的 MQTT command 安全转入 command queue / `message_bus`，由安全互锁、`agent_loop` 和 `tool_guard` 处理。
+- 完善 automation rule 管理：自然语言暂停/恢复/删除、状态查询、规则命名、冲突检测和默认任务可视化。
 - 丰富 timeline events：任务拆解、远端等待/超时、结果关联、watchdog 状态和持久化 trace。
 - 增加节点 heartbeat / discovery。
 - 增加 `storage_info` CLI，打印 SPIFFS/NVS/session 状态。

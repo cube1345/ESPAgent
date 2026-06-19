@@ -23,7 +23,7 @@ typedef struct {
     char *context;
     char *result;
     SemaphoreHandle_t done_sem;
-    bool timeout_abandoned;
+    SemaphoreHandle_t cleanup_sem;
 } subagent_ctx_t;
 
 static bool subagent_tool_allowed(const char *name)
@@ -81,6 +81,9 @@ static void subagent_cleanup_ctx(subagent_ctx_t *ctx)
     }
     if (ctx->done_sem) {
         vSemaphoreDelete(ctx->done_sem);
+    }
+    if (ctx->cleanup_sem) {
+        vSemaphoreDelete(ctx->cleanup_sem);
     }
     free(ctx->task);
     free(ctx->context);
@@ -226,10 +229,8 @@ done:
              ctx->result ? (int)strlen(ctx->result) : 0);
 
     xSemaphoreGive(ctx->done_sem);
-    if (ctx->timeout_abandoned) {
-        ESP_LOGW(TAG, "Subagent caller timed out; task owns cleanup");
-        subagent_cleanup_ctx(ctx);
-    }
+    xSemaphoreTake(ctx->cleanup_sem, portMAX_DELAY);
+    subagent_cleanup_ctx(ctx);
     vTaskDelete(NULL);
 }
 
@@ -302,9 +303,10 @@ esp_err_t tool_subagent_execute(const char *input_json, char *output, size_t out
                        ? strdup(context_json->valuestring)
                        : NULL;
     ctx->done_sem = xSemaphoreCreateBinary();
+    ctx->cleanup_sem = xSemaphoreCreateBinary();
     cJSON_Delete(input);
 
-    if (!ctx->task || !ctx->done_sem) {
+    if (!ctx->task || !ctx->done_sem || !ctx->cleanup_sem) {
         subagent_cleanup_ctx(ctx);
         snprintf(output, output_size, "Error: subagent setup failed");
         return ESP_ERR_NO_MEM;
@@ -327,7 +329,7 @@ esp_err_t tool_subagent_execute(const char *input_json, char *output, size_t out
     BaseType_t done = xSemaphoreTake(ctx->done_sem,
                                      pdMS_TO_TICKS(ESPAGENT_SUBAGENT_TIMEOUT_MS));
     if (done != pdTRUE) {
-        ctx->timeout_abandoned = true;
+        xSemaphoreGive(ctx->cleanup_sem);
         snprintf(output, output_size, "Error: subagent timed out after %d seconds",
                  ESPAGENT_SUBAGENT_TIMEOUT_MS / 1000);
         return ESP_ERR_TIMEOUT;
@@ -335,7 +337,7 @@ esp_err_t tool_subagent_execute(const char *input_json, char *output, size_t out
 
     snprintf(output, output_size, "%s",
              ctx->result ? ctx->result : "(subagent returned no result)");
-    subagent_cleanup_ctx(ctx);
+    xSemaphoreGive(ctx->cleanup_sem);
 
     ESP_LOGI(TAG, "Subagent completed, output=%d bytes", (int)strlen(output));
     return ESP_OK;

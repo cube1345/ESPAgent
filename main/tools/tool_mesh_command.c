@@ -3,14 +3,31 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "espagent_config.h"
+#include "bus/message_bus.h"
 #include "mesh/mesh_protocol.h"
 #include "sensors/sensor_mqtt.h"
+#include "tools/tool_sandbox.h"
 
 #include "cJSON.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
+
+typedef struct {
+    char task_id[48];
+    char command_id[ESPAGENT_MESH_ID_MAX];
+    char trace_id[ESPAGENT_MESH_TRACE_MAX];
+    char target_role[ESPAGENT_MESH_ROLE_MAX];
+    char target_node[ESPAGENT_MESH_NODE_MAX];
+    char action[ESPAGENT_MESH_ACTION_MAX];
+    char reply_channel[16];
+    char reply_chat_id[96];
+    uint32_t wait_ms;
+} mesh_wait_task_ctx_t;
 
 static const char *json_string(cJSON *root, const char *key)
 {
@@ -160,10 +177,124 @@ static esp_err_t copy_args(cJSON *root, cJSON *cmd)
     return ESP_OK;
 }
 
+static void mesh_wait_task(void *arg)
+{
+    mesh_wait_task_ctx_t *ctx = (mesh_wait_task_ctx_t *)arg;
+    if (!ctx) {
+        vTaskDelete(NULL);
+        return;
+    }
+
+    char output_json[768] = {0};
+    esp_err_t wait_err = sensor_mqtt_wait_output_message(ctx->command_id,
+                                                         output_json,
+                                                         sizeof(output_json),
+                                                         ctx->wait_ms);
+    const bool ok = wait_err == ESP_OK;
+    char summary[192] = {0};
+    snprintf(summary, sizeof(summary), "%s command_id=%s action=%s",
+             ok ? "Async mesh task completed" : "Async mesh task timed out",
+             ctx->command_id,
+             ctx->action);
+
+    (void)sensor_mqtt_publish_timeline_event("result",
+                                             "mesh_async_result",
+                                             ok ? "ok" : "timeout",
+                                             summary,
+                                             ctx->command_id,
+                                             ctx->target_role,
+                                             ctx->target_node,
+                                             ctx->action);
+
+    if (ctx->reply_channel[0] && ctx->reply_chat_id[0]) {
+        espagent_msg_t msg = {0};
+        snprintf(msg.channel, sizeof(msg.channel), "%s", ctx->reply_channel);
+        snprintf(msg.chat_id, sizeof(msg.chat_id), "%s", ctx->reply_chat_id);
+        msg.flags = ESPAGENT_MSG_FLAG_INTERNAL_RESULT;
+
+        char content[1152] = {0};
+        if (ok) {
+            snprintf(content, sizeof(content),
+                     "Internal async Mesh result. task_id=%s command_id=%s action=%s output_message=%s\n"
+                     "Please summarize this execution result to the user in one concise Chinese sentence. "
+                     "Do not call mesh_send_command again for this result.",
+                     ctx->task_id,
+                     ctx->command_id,
+                     ctx->action,
+                     output_json);
+        } else {
+            snprintf(content, sizeof(content),
+                     "Internal async Mesh timeout. task_id=%s command_id=%s action=%s wait_ms=%u. "
+                     "Please tell the user that the remote node did not return a result in time.",
+                     ctx->task_id,
+                     ctx->command_id,
+                     ctx->action,
+                     (unsigned)ctx->wait_ms);
+        }
+        msg.content = strdup(content);
+        if (msg.content) {
+            if (message_bus_push_inbound(&msg) != ESP_OK) {
+                free(msg.content);
+            }
+        }
+    }
+
+    free(ctx);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t start_mesh_wait_task(const char *command_id,
+                                      const char *trace_id,
+                                      const char *target_role,
+                                      const char *target_node,
+                                      const char *action,
+                                      const char *reply_channel,
+                                      const char *reply_chat_id,
+                                      uint32_t wait_ms,
+                                      char *task_id,
+                                      size_t task_id_size)
+{
+    mesh_wait_task_ctx_t *ctx = calloc(1, sizeof(*ctx));
+    if (!ctx) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    snprintf(ctx->task_id, sizeof(ctx->task_id), "mesh-task-%s", command_id);
+    snprintf(ctx->command_id, sizeof(ctx->command_id), "%s", command_id);
+    snprintf(ctx->trace_id, sizeof(ctx->trace_id), "%s", trace_id ? trace_id : "");
+    snprintf(ctx->target_role, sizeof(ctx->target_role), "%s", target_role ? target_role : "");
+    snprintf(ctx->target_node, sizeof(ctx->target_node), "%s", target_node ? target_node : "");
+    snprintf(ctx->action, sizeof(ctx->action), "%s", action ? action : "");
+    snprintf(ctx->reply_channel, sizeof(ctx->reply_channel), "%s", reply_channel ? reply_channel : "");
+    snprintf(ctx->reply_chat_id, sizeof(ctx->reply_chat_id), "%s", reply_chat_id ? reply_chat_id : "");
+    ctx->wait_ms = wait_ms;
+
+    if (task_id && task_id_size > 0) {
+        snprintf(task_id, task_id_size, "%s", ctx->task_id);
+    }
+
+    if (xTaskCreate(mesh_wait_task, "mesh_wait", 6 * 1024, ctx, 4, NULL) != pdPASS) {
+        free(ctx);
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
 esp_err_t tool_mesh_send_command_execute(const char *input_json,
                                          char *output,
                                          size_t output_size)
 {
+    char sandbox_reason[192] = {0};
+    esp_err_t sandbox_err = tool_sandbox_check("mesh_send_command",
+                                               input_json,
+                                               sandbox_reason,
+                                               sizeof(sandbox_reason));
+    if (sandbox_err != ESP_OK) {
+        snprintf(output, output_size, "Error: %s",
+                 sandbox_reason[0] ? sandbox_reason : "sandbox denied mesh command");
+        return sandbox_err;
+    }
+
     cJSON *root = cJSON_Parse(input_json);
     if (!root || !cJSON_IsObject(root)) {
         if (root) {
@@ -277,6 +408,13 @@ esp_err_t tool_mesh_send_command_execute(const char *input_json,
         return ESP_ERR_INVALID_ARG;
     }
     bool require_ack = json_bool(root, "require_ack", true);
+    bool async_wait = json_bool(root, "async", true);
+    const char *reply_channel = json_string(root, "reply_channel");
+    const char *reply_chat_id = json_string(root, "reply_chat_id");
+    char reply_channel_copy[16] = {0};
+    char reply_chat_id_copy[96] = {0};
+    copy_text(reply_channel_copy, sizeof(reply_channel_copy), reply_channel);
+    copy_text(reply_chat_id_copy, sizeof(reply_chat_id_copy), reply_chat_id);
 
     cJSON_AddStringToObject(cmd, "command_id", command_id_copy);
     cJSON_AddStringToObject(cmd, "trace_id", trace_id_copy);
@@ -359,20 +497,43 @@ esp_err_t tool_mesh_send_command_execute(const char *input_json,
                                                  target_node_copy,
                                                  action_copy);
         if (require_ack) {
-            char output_json[768] = {0};
             uint32_t wait_ms = ttl_ms > 0 ? (uint32_t)ttl_ms : 30000U;
-            esp_err_t wait_err = sensor_mqtt_wait_output_message(command_id_copy,
-                                                                 output_json,
-                                                                 sizeof(output_json),
-                                                                 wait_ms);
-            if (wait_err == ESP_OK) {
-                snprintf(output, output_size,
-                         "OK: mesh command completed command_id=%s output_message=%s",
-                         command_id_copy, output_json);
+            if (async_wait) {
+                char task_id[48] = {0};
+                esp_err_t task_err = start_mesh_wait_task(command_id_copy,
+                                                          trace_id_copy,
+                                                          target_role_copy,
+                                                          target_node_copy,
+                                                          action_copy,
+                                                          reply_channel_copy,
+                                                          reply_chat_id_copy,
+                                                          wait_ms,
+                                                          task_id,
+                                                          sizeof(task_id));
+                if (task_err == ESP_OK) {
+                    snprintf(output, output_size,
+                             "OK: queued MQTT mesh command action=%s topic=%s command_id=%s async_task_id=%s; result will be injected when OutputMessage arrives",
+                             action_copy, topic, command_id_copy, task_id);
+                } else {
+                    snprintf(output, output_size,
+                             "OK: queued MQTT mesh command action=%s topic=%s command_id=%s; async wait task failed: %s",
+                             action_copy, topic, command_id_copy, esp_err_to_name(task_err));
+                }
             } else {
-                snprintf(output, output_size,
-                         "OK: queued MQTT mesh command action=%s topic=%s command_id=%s; OutputMessage wait timed out after %ums",
-                         action_copy, topic, command_id_copy, (unsigned)wait_ms);
+                char output_json[768] = {0};
+                esp_err_t wait_err = sensor_mqtt_wait_output_message(command_id_copy,
+                                                                     output_json,
+                                                                     sizeof(output_json),
+                                                                     wait_ms);
+                if (wait_err == ESP_OK) {
+                    snprintf(output, output_size,
+                             "OK: mesh command completed command_id=%s output_message=%s",
+                             command_id_copy, output_json);
+                } else {
+                    snprintf(output, output_size,
+                             "OK: queued MQTT mesh command action=%s topic=%s command_id=%s; OutputMessage wait timed out after %ums",
+                             action_copy, topic, command_id_copy, (unsigned)wait_ms);
+                }
             }
         }
     } else {

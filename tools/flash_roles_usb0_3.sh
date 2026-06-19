@@ -8,6 +8,8 @@ BACKUP_FILE="${TMPDIR:-/tmp}/espagent_secrets.h.flash_roles_usb0_3.$$"
 IDF_PATH="${IDF_PATH:-/home/cube/WorkSpace/ESP/esp-idf}"
 IDF_PYTHON_ENV_PATH="${IDF_PYTHON_ENV_PATH:-/home/cube/.espressif/python_env/idf6.1_py3.13_env}"
 IDF_PYTHON="${IDF_PYTHON:-${IDF_PYTHON_ENV_PATH}/bin/python}"
+ESPAGENT_FLASH_BAUD="${ESPAGENT_FLASH_BAUD:-}"
+ESPAGENT_ERASE_BEFORE_FLASH="${ESPAGENT_ERASE_BEFORE_FLASH:-0}"
 export ESP_IDF_VERSION="${ESP_IDF_VERSION:-6.1.0}"
 export IDF_PATH
 export IDF_PYTHON_ENV_PATH
@@ -124,7 +126,20 @@ flash_one() {
     (cd "$ROOT_DIR" && "$IDF_PYTHON" "$IDF_PATH/tools/idf.py" fullclean)
   fi
 
-  (cd "$ROOT_DIR" && "$IDF_PYTHON" "$IDF_PATH/tools/idf.py" -p "$port" flash)
+  if [[ "$ESPAGENT_ERASE_BEFORE_FLASH" == "1" ]]; then
+    echo "==> Erasing flash on ${port} before flashing"
+    if [[ -n "$ESPAGENT_FLASH_BAUD" ]]; then
+      (cd "$ROOT_DIR" && "$IDF_PYTHON" "$IDF_PATH/tools/idf.py" -p "$port" -b "$ESPAGENT_FLASH_BAUD" erase-flash)
+    else
+      (cd "$ROOT_DIR" && "$IDF_PYTHON" "$IDF_PATH/tools/idf.py" -p "$port" erase-flash)
+    fi
+  fi
+
+  if [[ -n "$ESPAGENT_FLASH_BAUD" ]]; then
+    (cd "$ROOT_DIR" && "$IDF_PYTHON" "$IDF_PATH/tools/idf.py" -p "$port" -b "$ESPAGENT_FLASH_BAUD" flash)
+  else
+    (cd "$ROOT_DIR" && "$IDF_PYTHON" "$IDF_PATH/tools/idf.py" -p "$port" flash)
+  fi
 }
 
 restore_coordinator_profile() {

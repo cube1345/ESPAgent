@@ -100,6 +100,28 @@ Cron and the proactive service use the same inbound queue. Scheduled or self-che
 
 ---
 
+## Agent Sandbox
+
+ESPAgent does not implement a Linux container on ESP32-S3. Instead, it now uses
+a capability sandbox at the tool boundary. Every `tool_registry_execute()` call
+passes through `tool_sandbox_check()` before the C handler runs.
+
+The sandbox checks:
+
+- registered tool name and risk class
+- current node role and capabilities
+- protected SPIFFS paths such as config/secrets
+- Mesh command `ttl_ms`, `safety_level`, and whitelisted actions
+- automation rule interval/cooldown bounds
+- audio tone duration/volume limits
+- explicit `confirmed=true` for persistent high-impact rules and skill edits
+
+This makes the LLM an intent generator rather than a direct executor. Hardware,
+automation, file-write, privacy, and system actions must pass deterministic
+firmware checks before Guardian policy and local driver execution.
+
+---
+
 ## LingShu Agent Mesh Phase 1.6
 
 Current ESPAgent firmware models the ESP32-S3 as one Edge Agent Node in the planned LingShu Agent Mesh. This phase keeps the existing single `agent_loop` runtime, adds node identity, role-gated startup, mesh-style MQTT observability, and a first narrow cross-node command path.
@@ -126,9 +148,38 @@ MQTT topics:
 | `espagent/alerts` | subscribe | Logs alert messages |
 | `espagent/agent/timeline` | publish/subscribe | Receives Feishu inbound/outbound timeline events, ReAct tool events, structured OutputMessages, and Guardian audit inputs |
 
-This is intentionally not a full distributed multi-agent runtime yet. Feishu, WebSocket, cron, proactive checks, and future injected messages still converge on the same message bus and the same serial `agent_loop`. `mesh_send_command` now publishes `espagent.policy_check.v1` before the real Mesh command, waits for Guardian's `espagent.policy_decision.v1`, and only continues when `decision=allow`; then it waits for a matching structured `espagent.output.v1` OutputMessage when `require_ack=true`. Sensor role currently supports the whitelisted `read_temperature_humidity` command; Control role supports low/medium-risk whitelisted actuator commands. Guardian also observes timeline events and publishes `espagent.guardian.audit.v1` audit records.
+This is intentionally not a full distributed multi-agent runtime yet. Feishu, WebSocket, cron, proactive checks, automation callbacks, and injected async results still converge on the same message bus and the same serial `agent_loop`. `mesh_send_command` now publishes `espagent.policy_check.v1` before the real Mesh command, waits for Guardian's `espagent.policy_decision.v1`, and only continues when `decision=allow`; with `require_ack=true` it defaults to async mode, returns an `async_task_id`, waits for the matching structured `espagent.output.v1` OutputMessage in a background task, and injects that result back into `message_bus` for the LLM to summarize. Sensor role currently supports the whitelisted `read_temperature_humidity` command; Control role supports low/medium-risk whitelisted actuator commands and verifies a local cached Guardian allow decision before execution. Guardian also observes timeline events, publishes `espagent.guardian.audit.v1` audit records, and maintains a lightweight StateBoard.
+
+Persistent automation is the first runtime layer for multi-step and always-on conditional behavior. The LLM creates a deterministic workflow/rule through `automation_create_workflow` or `automation_create_rule`; the firmware stores rules in `/spiffs/automation.json`, and the FreeRTOS `automation` task periodically reads Sensor data through Mesh and triggers Control actions through the same Guardian-gated Mesh path. This is how tasks such as "red now, blue after 10 seconds" or "if humidity is above 40%, set the WS2812 red, otherwise blue" continue without keeping the LLM turn open.
+
+Automation has two execution paths. Condition-action rules are handled by one long-lived `rule_task`, which scans up to `ESPAGENT_AUTOMATION_MAX_RULES` active rules, respects each rule's `interval_s`, `cooldown_s`, and hysteresis, then runs Sensor/Control Mesh calls serially. Ordered/delayed workflows do not run inside `rule_task`: every accepted workflow starts a temporary `workflow_task`, executes up to `ESPAGENT_AUTOMATION_WORKFLOW_MAX_STEPS` steps in order, then marks itself complete. Current limits are 8 rules, 8 workflow slots, and 8 steps per workflow. Rules are persisted across reboot; workflow tasks are currently one-shot runtime work and are not restored after reboot.
 
 For four ESP32-S3 boards, use the same firmware and assign different node profiles in `espagent_secrets.h`: `coordinator_agent`, `sensor_agent`, `control_agent`, and `guardian_agent`. ESP32-P4/Android carry the display-terminal role. See `docs/ESP32_ROLE_PROFILES.md`.
+
+---
+
+## Repository Structure Rule
+
+The source tree is intentionally kept as one ESP-IDF firmware project. Role
+specialization happens through node profiles and role-gated startup, not through
+four separate firmware directories.
+
+Use these placement boundaries:
+
+- `main/`: firmware source compiled by `main/CMakeLists.txt`.
+- `spiffs_data/`: files bundled into the SPIFFS partition at flash time.
+- `tools/`: host-side flashing, verification, pressure test, and benchmark tools.
+- `benchmarks/`: benchmark datasets and expected behavior cases.
+- `docs/`: architecture, setup, handoff, roadmap, and current-state documents.
+- `artifacts/`, `build*/`, `tmp*/`: generated output, ignored by git.
+
+The detailed structure contract is in `docs/PROJECT_STRUCTURE.md`.
+
+Current structural debt: `main/sensors/sensor_mqtt.c` still mixes general MQTT
+Mesh transport, command routing, telemetry publishing, policy decision cache,
+OutputMessage waiting, and display-facing timeline topics. The next source-level
+architecture split should move generic MQTT/Mesh code into `main/mesh/` and keep
+only sensor sampling/telemetry in `main/sensors/`.
 
 ---
 
@@ -167,6 +218,10 @@ main/
 │   ├── agent_loop.c        ReAct loop: LLM call → tool execution → repeat
 │   ├── context_builder.h   System prompt + messages builder API
 │   └── context_builder.c   Reads bootstrap files + memory + tool guidance
+│
+├── automation/
+│   ├── automation_engine.h Persistent workflow/rule runtime API
+│   └── automation_engine.c FreeRTOS automation task, rule persistence, Mesh execution
 │
 ├── tools/
 │   ├── tool_registry.h     Tool definition struct, register/dispatch API
@@ -265,6 +320,7 @@ main/
 | `feishu_ws`        | 0    | 5        | 12 KB  | Feishu WebSocket receive loop        |
 | `agent_loop`       | 1    | 6        | 12 KB  | Message processing + LLM API call    |
 | `subagent`         | 1    | 5        | 12 KB  | Temporary bounded subagent ReAct loop |
+| `automation`       | 0    | 4        | 12 KB  | Persistent workflow/rule polling and Mesh actions |
 | `outbound`         | 0    | 5        | 8 KB   | Route responses to Feishu / WS     |
 | `proactive`        | any  | 4        | 5 KB   | Periodic proactive agent checks      |
 | `cron`             | any  | 4        | 5 KB   | Scheduled job polling and injection  |
@@ -333,6 +389,7 @@ SPIFFS is a flat filesystem — no real directories. Files use path-like names.
 /spiffs/memory/2026-02-05.md    Daily notes (one file per day)
 /spiffs/sessions/session_<fnv64>.jsonl Session history (hash of channel chat id)
 /spiffs/cron.json               Persistent scheduled jobs
+/spiffs/automation.json         Persistent automation workflows/rules
 ```
 
 Session files are JSONL (one JSON object per line):
@@ -499,6 +556,7 @@ app_main()
   ├── [if coordinator/llm]
   │   └── llm_proxy_init()          Load API key + model from build-time secrets
   ├── tool_registry_init()          Register tools, build tools JSON
+  ├── automation_engine_init()      Load /spiffs/automation.json rules
   ├── [if coordinator/scheduler]
   │   ├── cron_service_init()
   │   ├── heartbeat_init()
@@ -527,6 +585,7 @@ app_main()
       ├── control_node_start()
       ├── display_node_start()
       ├── [if coordinator/llm] agent_loop_start()
+      ├── automation_engine_start()
       ├── [if coordinator/communication] feishu_bot_start()
       ├── sensor_mqtt_start()       Mesh MQTT state/event/telemetry for all roles
       ├── [if coordinator/scheduler]

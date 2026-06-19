@@ -1,9 +1,14 @@
 # Build output
 build/
 build_*/
+build-*/
+build.*/
 dist/
 tmp/
+tmp_*/
+tmp-*/
 releases/
+artifacts/
 
 # ESP-IDF
 sdkconfig
@@ -33,8 +38,15 @@ main/espagent_secrets.h
 
 # Cache / Compiled
 .cache
+__pycache__/
+**/__pycache__/
 *.pyc
+*.pyo
 *.bin
+*.elf
+*.map
+*.log
+*.tmp
 
 # Documentation (generated)
 BUILD_TEST_GUIDE.md
